@@ -42,7 +42,7 @@ export default function Dashboard() {
                     <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sky-400 shadow-[0_0_14px_rgba(56,189,248,0.9)]" />
                 </div>
 
-                <p className="mono text-[10px] sm:text-xs tracking-[0.4em] text-sky-400 rise-in">AEGISNET // COMMAND DASHBOARD</p>
+                <p className="mono text-[10px] sm:text-xs tracking-[0.4em] text-sky-400 rise-in">KERMA GAMES // COMMAND DASHBOARD</p>
                 <h1 className="mt-5 font-display font-extrabold text-white text-3xl sm:text-5xl lg:text-6xl leading-[1.05] tracking-wide">
                     {['EVERY DOOR. EVERY CAMERA.', 'ONE COMMAND SURFACE.'].map((line, i) => (
                         <span key={line} className="block overflow-hidden pb-1">

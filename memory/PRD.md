@@ -32,6 +32,9 @@ AegisNet Security Command OS — a dark, SOC-grade SaaS interface for building a
 - Events Log: searchable/filterable (door, result, method) live audit trail with stream pause toggle and export stub
 - All verified via Playwright: page loads, door remote open + toast, camera zoom modal, full enroll flow (scan → submit → card appears), events filtering, devices page
 
+## Branding update (build 2)
+- Kerma Games logo (wordmark SVG from kermagames.com) in the sidebar, bulldog icon as favicon, browser title "Kerma · Security Command OS", hero eyebrow rebranded to KERMA GAMES
+
 ## Mocked / Not Real Yet
 - ALL data is simulated (no real gateway, NVR, scanner, or reader connectivity)
 - No backend persistence; state resets on reload

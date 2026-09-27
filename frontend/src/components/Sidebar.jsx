@@ -1,6 +1,5 @@
 import { NavLink } from 'react-router-dom';
 import { LayoutDashboard, Map, Video, Users, Cpu, Activity, Radio } from 'lucide-react';
-import { Logo } from './Logo';
 
 const NAV = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, testid: 'nav-dashboard' },
@@ -17,12 +16,9 @@ export function Sidebar() {
             data-testid="sidebar"
             className="hidden lg:flex fixed inset-y-0 left-0 w-64 flex-col border-r border-sky-500/10 bg-[#070c18]/95 backdrop-blur-xl z-40"
         >
-            <div className="flex items-center gap-3 px-6 pt-7 pb-6">
-                <Logo size={40} />
-                <div>
-                    <p className="font-display font-bold text-lg tracking-[0.18em] text-white leading-none">AEGISNET</p>
-                    <p className="mono text-[9px] tracking-[0.3em] text-sky-400/80 mt-1.5">SECURITY COMMAND OS</p>
-                </div>
+            <div className="flex flex-col gap-2.5 px-6 pt-7 pb-6">
+                <img src="/kerma-logo.svg" alt="Kerma Games" data-testid="brand-logo" className="h-11 w-auto self-start" />
+                <p className="mono text-[9px] tracking-[0.3em] text-sky-400/80">SECURITY COMMAND OS</p>
             </div>
 
             <div className="mx-6 mb-6 flex items-center gap-2.5 rounded-lg border border-emerald-400/20 bg-emerald-400/5 px-3 py-2.5">
@@ -65,7 +61,7 @@ export function Sidebar() {
                     </div>
                     <p className="mono text-[10px] text-slate-500 mt-2 tracking-wider">940 MBPS · 22 NODES ROUTED</p>
                 </div>
-                <p className="mono text-[9px] text-slate-600 tracking-[0.25em] text-center">AEGISNET v2.4.1 · BUILD 8817</p>
+                <p className="mono text-[9px] text-slate-600 tracking-[0.25em] text-center">KERMA SECURE v2.4.1 · BUILD 8817</p>
             </div>
         </aside>
     );
