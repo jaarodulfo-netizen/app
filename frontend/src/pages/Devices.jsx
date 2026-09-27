@@ -14,7 +14,7 @@ const TYPE_META = {
 
 const STATUS = {
     online: { label: 'ONLINE', dot: 'bg-emerald-400', text: 'text-emerald-300' },
-    degraded: { label: 'DEGRADED', dot: 'bg-amber-400', text: 'text-amber-300' },
+    degraded: { label: 'DEGRADED', dot: 'bg-orange-400', text: 'text-orange-300' },
     offline: { label: 'OFFLINE', dot: 'bg-red-500', text: 'text-red-400' },
 };
 

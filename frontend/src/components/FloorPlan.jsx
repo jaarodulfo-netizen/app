@@ -3,7 +3,7 @@ import { Lock, LockOpen, AlertTriangle, Loader2 } from 'lucide-react';
 const STATUS_STYLE = {
     locked: { ring: 'border-sky-400/70', dot: 'bg-sky-400', text: 'text-sky-300', glow: 'shadow-[0_0_16px_rgba(56,189,248,0.6)]', ping: 'bg-sky-400' },
     unlocked: { ring: 'border-emerald-400/70', dot: 'bg-emerald-400', text: 'text-emerald-300', glow: 'shadow-[0_0_16px_rgba(16,185,129,0.6)]', ping: 'bg-emerald-400' },
-    opening: { ring: 'border-amber-400/70', dot: 'bg-amber-400', text: 'text-amber-300', glow: 'shadow-[0_0_16px_rgba(245,158,11,0.6)]', ping: 'bg-amber-400' },
+    opening: { ring: 'border-orange-400/70', dot: 'bg-orange-400', text: 'text-orange-300', glow: 'shadow-[0_0_16px_rgba(245,158,11,0.6)]', ping: 'bg-orange-400' },
     alarm: { ring: 'border-red-500/80', dot: 'bg-red-500', text: 'text-red-400', glow: 'shadow-[0_0_18px_rgba(239,68,68,0.7)]', ping: 'bg-red-500' },
 };
 
@@ -78,11 +78,11 @@ export function FloorPlan({ doors, selectedId, onSelect, compact = false }) {
                         <span
                             className={`relative flex items-center justify-center rounded-full border-2 bg-[#0b1220] transition-transform duration-200 group-hover:scale-125 ${s.ring} ${s.glow} ${
                                 d.status === 'alarm' ? 'alarm-flash' : ''
-                            } ${compact ? 'h-5 w-5' : 'h-8 w-8'} ${active ? 'scale-125 ring-2 ring-white/40' : ''}`}
+                            } ${compact ? 'h-5 w-5' : 'h-8 w-8'} ${active ? 'scale-125 ring-2 ring-[#fee396]/70' : ''}`}
                         >
                             {d.status === 'locked' && <Lock className={compact ? 'h-2.5 w-2.5 text-sky-300' : 'h-3.5 w-3.5 text-sky-300'} />}
                             {d.status === 'unlocked' && <LockOpen className={compact ? 'h-2.5 w-2.5 text-emerald-300' : 'h-3.5 w-3.5 text-emerald-300'} />}
-                            {d.status === 'opening' && <Loader2 className={`${compact ? 'h-2.5 w-2.5' : 'h-3.5 w-3.5'} text-amber-300 animate-spin`} />}
+                            {d.status === 'opening' && <Loader2 className={`${compact ? 'h-2.5 w-2.5' : 'h-3.5 w-3.5'} text-orange-300 animate-spin`} />}
                             {d.status === 'alarm' && <AlertTriangle className={compact ? 'h-2.5 w-2.5 text-red-400' : 'h-3.5 w-3.5 text-red-400'} />}
                         </span>
                         {!compact && (

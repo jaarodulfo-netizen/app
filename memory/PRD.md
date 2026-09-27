@@ -35,6 +35,19 @@ AegisNet Security Command OS — a dark, SOC-grade SaaS interface for building a
 ## Branding update (build 2)
 - Kerma Games logo (wordmark SVG from kermagames.com) in the sidebar, bulldog icon as favicon, browser title "Kerma · Security Command OS", hero eyebrow rebranded to KERMA GAMES
 
+## Warm accent blend (build 3)
+- Kerma orange-gold (#FEE396 / #EA7F2B) woven through: gold corner frames, hero gradient tail, enroll CTA, alerts pill/bar, radar core, marquee dots, motion badges, remote-event icons, selected-door ring
+
+## Officer Login (build 3)
+- Full JWT auth (FastAPI + MongoDB + bcrypt + PyJWT, Bearer tokens, 12h sessions)
+- Full lockout: visitors only see the Kerma login screen
+- Commander (juan.alvarez@kermagames.com) seeds on startup only when missing
+- Commander creates officer accounts at /officers — backend generates a temporary password shown once; officers are forced through a password-rotation screen on first login
+- Domain allowlist enforced server-side: only @kermagames.com and @trivelta.com
+- Brute-force lockout: 5 failed attempts = 15 min
+- Officers nav hidden from non-commanders; officers API rejects non-commanders with 403
+- Verified: curl chain (domain reject, login, me, rotate, create officer, domain-reject on create) + Playwright e2e (visitor lockout, temp login, forced rotation, console, officer nav hidden, logout)
+
 ## Mocked / Not Real Yet
 - ALL data is simulated (no real gateway, NVR, scanner, or reader connectivity)
 - No backend persistence; state resets on reload

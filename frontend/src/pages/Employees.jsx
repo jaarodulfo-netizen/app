@@ -267,7 +267,7 @@ export default function Employees() {
                                 className={`ml-auto mono text-[9px] tracking-widest rounded border px-2 py-1 ${
                                     emp.faceSync
                                         ? 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10'
-                                        : 'text-amber-300 border-amber-400/30 bg-amber-400/10'
+                                        : 'text-orange-300 border-orange-400/30 bg-orange-400/10'
                                 }`}
                             >
                                 {emp.faceSync ? `FACE SYNCED · ${emp.faceMatch}%` : 'FACE PENDING'}

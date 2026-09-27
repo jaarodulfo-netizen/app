@@ -20,7 +20,7 @@ const STATS = [
     { id: 'people', label: 'PEOPLE INSIDE', value: 142, total: 200, icon: Users, accent: 'text-sky-300', bar: 'from-sky-500 to-cyan-400', pct: 71 },
     { id: 'doors', label: 'DOORS ONLINE', value: 18, total: 20, icon: DoorOpen, accent: 'text-emerald-300', bar: 'from-emerald-500 to-teal-400', pct: 90 },
     { id: 'cams', label: 'NVR CAMERAS LIVE', value: 4, total: 6, icon: Video, accent: 'text-sky-300', bar: 'from-sky-500 to-blue-500', pct: 67 },
-    { id: 'alerts', label: 'CRITICAL ALERTS', value: 2, total: null, icon: AlertTriangle, accent: 'text-red-400', bar: 'from-red-500 to-amber-500', pct: 100, pad: 2 },
+    { id: 'alerts', label: 'CRITICAL ALERTS', value: 2, total: null, icon: AlertTriangle, accent: 'text-red-400', bar: 'from-red-500 to-[#ea7f2b]', pct: 100, pad: 2 },
 ];
 
 export default function Dashboard() {
@@ -31,23 +31,26 @@ export default function Dashboard() {
         <div className="space-y-6" data-testid="dashboard-page">
             {/* HERO */}
             <section className="aegis-panel corner-frame relative overflow-hidden rounded-2xl bg-grid px-6 sm:px-10 py-10 sm:py-14">
+                <div className="pointer-events-none absolute -left-24 -bottom-28 h-80 w-80 rounded-full bg-[#ea7f2b]/10 blur-[110px]" />
                 <div className="absolute -right-24 -top-24 h-96 w-96 opacity-70 pointer-events-none hidden sm:block">
                     <div className="absolute inset-0 rounded-full border border-sky-500/20" />
                     <div className="absolute inset-10 rounded-full border border-sky-500/15" />
-                    <div className="absolute inset-20 rounded-full border border-sky-500/10" />
+                    <div className="absolute inset-20 rounded-full border border-[#ea7f2b]/20" />
                     <div
                         className="absolute inset-0 rounded-full radar-sweep"
                         style={{ background: 'conic-gradient(from 0deg, rgba(56,189,248,0.22), transparent 70deg, transparent 360deg)' }}
                     />
-                    <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-sky-400 shadow-[0_0_14px_rgba(56,189,248,0.9)]" />
+                    <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#fee396] gold-glow" />
                 </div>
 
-                <p className="mono text-[10px] sm:text-xs tracking-[0.4em] text-sky-400 rise-in">KERMA GAMES // COMMAND DASHBOARD</p>
+                <p className="mono text-[10px] sm:text-xs tracking-[0.4em] rise-in">
+                    <span className="text-gold">KERMA GAMES</span> <span className="text-sky-400">// COMMAND DASHBOARD</span>
+                </p>
                 <h1 className="mt-5 font-display font-extrabold text-white text-3xl sm:text-5xl lg:text-6xl leading-[1.05] tracking-wide">
                     {['EVERY DOOR. EVERY CAMERA.', 'ONE COMMAND SURFACE.'].map((line, i) => (
                         <span key={line} className="block overflow-hidden pb-1">
                             <motion.span
-                                className={`block ${i === 1 ? 'text-transparent bg-clip-text bg-gradient-to-r from-sky-300 via-cyan-400 to-blue-500' : ''}`}
+                                className={`block ${i === 1 ? 'text-transparent bg-clip-text bg-gradient-to-r from-sky-300 via-cyan-300 to-[#fee396]' : ''}`}
                                 initial={{ y: '110%' }}
                                 animate={{ y: 0 }}
                                 transition={{ delay: 0.2 + i * 0.15, duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
@@ -82,7 +85,7 @@ export default function Dashboard() {
                     <Link
                         to="/employees"
                         data-testid="hero-enroll-btn"
-                        className="flex items-center gap-2 rounded-full border border-sky-500/40 px-6 py-3 font-head font-bold tracking-wide text-sm text-sky-300 transition-colors duration-200 hover:bg-sky-500/10"
+                        className="flex items-center gap-2 rounded-full border border-[#ea7f2b]/50 px-6 py-3 font-head font-bold tracking-wide text-sm text-[#fee396] transition-colors duration-200 hover:bg-[#ea7f2b]/10"
                     >
                         <ScanFace size={16} />
                         ENROLL EMPLOYEE
@@ -90,7 +93,7 @@ export default function Dashboard() {
                     <div className="hidden md:flex items-center gap-5 ml-4 mono text-[10px] tracking-widest text-slate-500">
                         <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> GATEWAY ONLINE</span>
                         <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-red-500 rec-blink" /> NVR REC</span>
-                        <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-sky-400" /> PERIMETER ARMED</span>
+                        <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-[#ea7f2b]" /> PERIMETER ARMED</span>
                     </div>
                 </motion.div>
             </section>
@@ -104,7 +107,7 @@ export default function Dashboard() {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.15 + i * 0.08, duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-                        className="aegis-panel rounded-xl p-5 transition-colors duration-300 hover:border-sky-400/40"
+                        className="aegis-panel rounded-xl p-5 transition-colors duration-300 hover:border-[#ea7f2b]/40"
                     >
                         <div className="flex items-center justify-between">
                             <p className="mono text-[10px] tracking-[0.25em] text-slate-500">{s.label}</p>
@@ -139,7 +142,7 @@ export default function Dashboard() {
                             <Activity size={15} className="text-sky-400" />
                             <h2 className="font-head font-bold tracking-wider text-slate-100">LIVE ACCESS EVENTS</h2>
                         </div>
-                        <Link to="/events" data-testid="view-all-events-link" className="mono text-[10px] tracking-widest text-sky-400 hover:text-cyan-300 transition-colors duration-200">
+                        <Link to="/events" data-testid="view-all-events-link" className="mono text-[10px] tracking-widest text-sky-400 hover:text-[#fee396] transition-colors duration-200">
                             FULL LOG →
                         </Link>
                     </div>
@@ -158,7 +161,7 @@ export default function Dashboard() {
                             <button
                                 data-testid="mini-map-open-btn"
                                 onClick={() => navigate('/map')}
-                                className="mono text-[10px] tracking-widest text-sky-400 hover:text-cyan-300 transition-colors duration-200"
+                                className="mono text-[10px] tracking-widest text-sky-400 hover:text-[#fee396] transition-colors duration-200"
                             >
                                 EXPAND →
                             </button>
@@ -173,7 +176,7 @@ export default function Dashboard() {
                                 <div key={d.id} className="flex items-center gap-3">
                                     <span
                                         className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                                            d.status === 'online' ? 'bg-emerald-400' : d.status === 'degraded' ? 'bg-amber-400' : 'bg-red-500'
+                                            d.status === 'online' ? 'bg-emerald-400' : d.status === 'degraded' ? 'bg-[#ea7f2b]' : 'bg-red-500'
                                         }`}
                                     />
                                     <span className="text-xs text-slate-300 flex-1 truncate">{d.name}</span>
@@ -194,7 +197,7 @@ export default function Dashboard() {
             >
                 <div className="flex items-center justify-between mb-4">
                     <h2 className="font-head font-bold tracking-wider text-slate-100">NVR QUICK VIEW</h2>
-                    <Link to="/feeds" data-testid="view-feeds-link" className="mono text-[10px] tracking-widest text-sky-400 hover:text-cyan-300 transition-colors duration-200">
+                    <Link to="/feeds" data-testid="view-feeds-link" className="mono text-[10px] tracking-widest text-sky-400 hover:text-[#fee396] transition-colors duration-200">
                         ALL CHANNELS →
                     </Link>
                 </div>
@@ -218,12 +221,12 @@ export default function Dashboard() {
             </motion.section>
 
             {/* MARQUEE */}
-            <div className="overflow-hidden rounded-xl border border-sky-500/10 bg-[#070c18]/80 py-3">
+            <div className="overflow-hidden rounded-xl border border-[#ea7f2b]/15 bg-[#070c18]/80 py-3">
                 <div className="marquee-track">
                     {[...MARQUEE_ITEMS, ...MARQUEE_ITEMS].map((item, i) => (
                         <span key={i} className="flex items-center mono text-[10px] tracking-[0.3em] text-slate-500">
                             <span className="px-6">{item}</span>
-                            <span className="h-1 w-1 rounded-full bg-sky-500/50" />
+                            <span className="h-1 w-1 rounded-full bg-[#ea7f2b]/60" />
                         </span>
                     ))}
                 </div>

@@ -27,7 +27,7 @@ function CamTile({ cam, onZoom, large = false }) {
                     />
                     <div className="absolute inset-0 bg-sky-900/20 mix-blend-overlay" />
                     <span
-                        className="absolute right-3 top-1/3 mono text-[9px] tracking-widest text-amber-300/90 border border-amber-400/40 bg-amber-400/10 rounded px-1.5 py-0.5 motion-flicker"
+                        className="absolute right-3 top-1/3 mono text-[9px] tracking-widest text-[#fee396] border border-[#ea7f2b]/40 bg-[#ea7f2b]/10 rounded px-1.5 py-0.5 motion-flicker"
                         style={{ animationDelay: `${(parseInt(cam.code.slice(-1), 10) * 1.7) % 6}s` }}
                     >
                         MOTION

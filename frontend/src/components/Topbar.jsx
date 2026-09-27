@@ -1,7 +1,8 @@
 import { NavLink } from 'react-router-dom';
-import { Search, Bell, Building2, LayoutDashboard, Map, Video, Users, Cpu, Activity } from 'lucide-react';
+import { Search, Bell, Building2, LayoutDashboard, Map, Video, Users, Cpu, Activity, LogOut, ShieldCheck } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useNow } from '../context/SecurityContext';
+import { useAuth } from '../context/AuthContext';
 
 const MOBILE_NAV = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
@@ -10,10 +11,15 @@ const MOBILE_NAV = [
     { to: '/employees', label: 'People', icon: Users },
     { to: '/devices', label: 'Devices', icon: Cpu },
     { to: '/events', label: 'Events', icon: Activity },
+    { to: '/officers', label: 'Officers', icon: ShieldCheck, commanderOnly: true },
 ];
 
 export function Topbar() {
     const now = useNow(1000);
+    const { user, logout } = useAuth();
+    const initials = user?.name ? user.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() : '—';
+    const mobileItems = MOBILE_NAV.filter((n) => !n.commanderOnly || user?.role === 'commander');
+
     return (
         <header data-testid="topbar" className="sticky top-0 z-30 border-b border-sky-500/10 bg-[#050811]/85 backdrop-blur-xl">
             <div className="flex items-center gap-4 px-5 sm:px-8 h-16">
@@ -44,27 +50,34 @@ export function Topbar() {
                     </span>
                     <button
                         data-testid="alerts-pill"
-                        className="relative flex items-center gap-2 rounded-full border border-amber-400/30 bg-amber-400/10 px-3.5 py-1.5 transition-colors duration-200 hover:bg-amber-400/20"
+                        className="relative flex items-center gap-2 rounded-full border border-orange-500/40 bg-orange-500/10 px-3.5 py-1.5 transition-colors duration-200 hover:bg-orange-500/20"
                     >
-                        <Bell size={14} className="text-amber-300" />
-                        <span className="mono text-xs text-amber-200">02</span>
+                        <Bell size={14} className="text-[#fee396]" />
+                        <span className="mono text-xs text-gold">02</span>
                     </button>
                     <div className="hidden xl:flex items-center gap-3 border-l border-white/10 pl-5">
-                        <img
-                            src="https://images.unsplash.com/photo-1560250097-0b93528c311a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBlbXBsb3llZSUyMHBvcnRyYWl0JTIwaGVhZHNob3QlMjBhdmF0YXJ8ZW58MHx8fHwxNzkwNTQwMDcxfDA&ixlib=rb-4.1.0&q=85"
-                            alt="Officer"
-                            className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40"
-                        />
+                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-sky-600/50 to-[#ea7f2b]/40 ring-2 ring-[#ea7f2b]/60">
+                            <span className="font-display font-bold text-[11px] text-white">{initials}</span>
+                        </div>
                         <div>
-                            <p className="text-xs font-semibold text-slate-200 leading-none">M. Vance</p>
-                            <p className="mono text-[9px] text-sky-400 tracking-widest mt-1">SHIFT COMMANDER</p>
+                            <p className="text-xs font-semibold text-slate-200 leading-none">{user?.name}</p>
+                            <p className="mono text-[9px] text-gold tracking-widest mt-1">{user?.role === 'commander' ? 'COMMANDER' : 'OFFICER'}</p>
                         </div>
                     </div>
+                    <button
+                        data-testid="logout-btn"
+                        onClick={logout}
+                        title="End session"
+                        className="flex items-center gap-2 rounded-full border border-white/10 px-3.5 py-1.5 mono text-[10px] tracking-widest text-slate-400 transition-colors duration-200 hover:text-red-300 hover:border-red-400/40"
+                    >
+                        <LogOut size={13} />
+                        <span className="hidden sm:inline">LOGOUT</span>
+                    </button>
                 </div>
             </div>
 
             <nav className="lg:hidden flex gap-2 overflow-x-auto px-5 pb-3">
-                {MOBILE_NAV.map((item) => (
+                {mobileItems.map((item) => (
                     <NavLink
                         key={item.to}
                         to={item.to}

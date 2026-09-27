@@ -9,7 +9,7 @@ import { CAMERAS } from '../data/mockData';
 const STATUS_META = {
     locked: { label: 'LOCKED', cls: 'text-sky-300 border-sky-400/30 bg-sky-400/10', dot: 'bg-sky-400' },
     unlocked: { label: 'UNLOCKED', cls: 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10', dot: 'bg-emerald-400' },
-    opening: { label: 'RELEASING', cls: 'text-amber-300 border-amber-400/30 bg-amber-400/10', dot: 'bg-amber-400' },
+    opening: { label: 'RELEASING', cls: 'text-orange-300 border-orange-400/30 bg-orange-400/10', dot: 'bg-orange-400' },
     alarm: { label: 'TAMPER ALARM', cls: 'text-red-300 border-red-400/30 bg-red-400/10', dot: 'bg-red-500' },
 };
 

@@ -124,7 +124,7 @@
         position: absolute;
         width: 14px;
         height: 14px;
-        border-color: rgba(56, 189, 248, 0.6);
+        border-color: rgba(234, 127, 43, 0.7);
         z-index: 6;
         pointer-events: none;
     }
@@ -140,6 +140,17 @@
         border-bottom: 2px solid;
         border-right: 2px solid;
     }
+}
+
+/* Kerma brand gold accents */
+.text-gold {
+    color: #fee396;
+}
+.bg-kerma-degrade {
+    background: linear-gradient(90deg, #fee396, #ea7f2b);
+}
+.gold-glow {
+    box-shadow: 0 0 18px rgba(234, 127, 43, 0.35);
 }
 
 /* marquee */

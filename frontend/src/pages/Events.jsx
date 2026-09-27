@@ -131,7 +131,7 @@ export default function Events() {
                                         {e.doorCode} · {e.door?.toUpperCase()} — {e.zone}
                                     </p>
                                     <span className="hidden sm:flex items-center gap-1.5 mono text-[10px] tracking-widest text-slate-500">
-                                        <Icon size={12} className="text-sky-400" />
+                                        <Icon size={12} className="text-[#fee396]" />
                                         {e.method}
                                     </span>
                                     <div className="flex items-center gap-3 justify-end">

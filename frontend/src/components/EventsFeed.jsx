@@ -22,7 +22,7 @@ export function EventsFeed({ limit = 9 }) {
                         className="flex items-center gap-3.5 px-5 py-3.5"
                     >
                         {e.method === 'REMOTE' ? (
-                            <Radio size={16} className="shrink-0 text-sky-400" />
+                            <Radio size={16} className="shrink-0 text-[#fee396]" />
                         ) : e.result === 'granted' ? (
                             <CheckCircle2 size={16} className="shrink-0 text-emerald-400" />
                         ) : (

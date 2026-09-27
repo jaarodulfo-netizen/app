@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Map, Video, Users, Cpu, Activity, Radio } from 'lucide-react';
+import { LayoutDashboard, Map, Video, Users, Cpu, Activity, Radio, ShieldCheck } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 
 const NAV = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, testid: 'nav-dashboard' },
@@ -8,17 +9,23 @@ const NAV = [
     { to: '/employees', label: 'Enrollment', icon: Users, testid: 'nav-employees' },
     { to: '/devices', label: 'Access Devices', icon: Cpu, testid: 'nav-devices' },
     { to: '/events', label: 'Events Log', icon: Activity, testid: 'nav-events' },
+    { to: '/officers', label: 'Officers', icon: ShieldCheck, testid: 'nav-officers', commanderOnly: true },
 ];
 
 export function Sidebar() {
+    const { user } = useAuth();
+    const items = NAV.filter((n) => !n.commanderOnly || user?.role === 'commander');
+
     return (
         <aside
             data-testid="sidebar"
             className="hidden lg:flex fixed inset-y-0 left-0 w-64 flex-col border-r border-sky-500/10 bg-[#070c18]/95 backdrop-blur-xl z-40"
         >
-            <div className="flex flex-col gap-2.5 px-6 pt-7 pb-6">
-                <img src="/kerma-logo.svg" alt="Kerma Games" data-testid="brand-logo" className="h-11 w-auto self-start" />
+            <div className="relative flex flex-col gap-2.5 px-6 pt-7 pb-6">
+                <div className="pointer-events-none absolute -top-6 -left-6 h-28 w-28 rounded-full bg-[#ea7f2b]/15 blur-2xl" />
+                <img src="/kerma-logo.svg" alt="Kerma Games" data-testid="brand-logo" className="h-11 w-auto self-start relative" />
                 <p className="mono text-[9px] tracking-[0.3em] text-sky-400/80">SECURITY COMMAND OS</p>
+                <div className="h-px w-full bg-gradient-to-r from-[#ea7f2b]/60 via-[#fee396]/30 to-transparent" />
             </div>
 
             <div className="mx-6 mb-6 flex items-center gap-2.5 rounded-lg border border-emerald-400/20 bg-emerald-400/5 px-3 py-2.5">
@@ -30,7 +37,7 @@ export function Sidebar() {
             </div>
 
             <nav className="flex-1 px-4 space-y-1.5">
-                {NAV.map((item) => (
+                {items.map((item) => (
                     <NavLink
                         key={item.to}
                         to={item.to}
@@ -44,7 +51,7 @@ export function Sidebar() {
                             }`
                         }
                     >
-                        <item.icon className="h-4.5 w-4.5 shrink-0" size={18} />
+                        <item.icon size={18} className="shrink-0" />
                         {item.label}
                     </NavLink>
                 ))}
@@ -57,7 +64,7 @@ export function Sidebar() {
                         <span className="mono text-[10px] tracking-widest">UPLINK STABLE</span>
                     </div>
                     <div className="mt-3 h-1 rounded-full bg-slate-800 overflow-hidden">
-                        <div className="h-full w-[98%] rounded-full bg-gradient-to-r from-sky-500 to-cyan-400" />
+                        <div className="h-full w-[98%] rounded-full bg-gradient-to-r from-sky-500 via-cyan-400 to-[#ea7f2b]" />
                     </div>
                     <p className="mono text-[10px] text-slate-500 mt-2 tracking-wider">940 MBPS · 22 NODES ROUTED</p>
                 </div>
