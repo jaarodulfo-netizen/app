@@ -1,0 +1,148 @@
+{
+  "project_name": "AegisNet Security Command OS",
+  "app_type": "saas_app",
+  "theme": "Dark Security Operations Center (SOC) Tactical Aesthetic",
+  "color_palette": {
+    "background_primary": "#050811",
+    "background_surface": "#0b1220",
+    "background_card": "#0f172a",
+    "background_card_hover": "#1e293b",
+    "border_subtle": "rgba(30, 58, 138, 0.3)",
+    "border_glowing": "rgba(14, 165, 233, 0.6)",
+    "accent_primary_blue": "#0284c7",
+    "accent_electric_cyan": "#06b6d4",
+    "accent_neon_blue": "#38bdf8",
+    "status_success_emerald": "#10b981",
+    "status_warning_amber": "#f59e0b",
+    "status_danger_crimson": "#ef4444",
+    "text_primary": "#f8fafc",
+    "text_secondary": "#94a3b8",
+    "text_muted": "#64748b",
+    "gradient_background": "bg-gradient-to-b from-[#050811] via-[#091124] to-[#020617]",
+    "gradient_blue_degrade": "bg-gradient-to-r from-sky-500/20 via-blue-600/10 to-transparent",
+    "glass_panel": "backdrop-blur-xl bg-[#0b1220]/80 border border-sky-500/20 shadow-[0_8px_32px_rgba(0,0,0,0.37)]"
+  },
+  "typography": {
+    "headings": "Orbitron, Rajdhani, or Outfit (Display / Tech)",
+    "body": "Plus Jakarta Sans or Inter",
+    "mono_data": "JetBrains Mono or Fira Code",
+    "font_family_imports": "@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Orbitron:wght@500;700;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap');",
+    "heading_h1": "text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-white",
+    "heading_h2": "text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-white",
+    "heading_h3": "text-lg sm:text-xl font-semibold text-slate-100",
+    "label_mono": "font-mono text-xs uppercase tracking-widest text-sky-400"
+  },
+  "visual_enhancers": {
+    "grid_overlay": "bg-[linear-gradient(to_right,#1e293b15_1px,transparent_1px),linear-gradient(to_bottom,#1e293b15_1px,transparent_1px)] bg-[size:24px_24px]",
+    "scanline_effect": "relative before:absolute before:inset-0 before:bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%)] before:bg-[length:100%_4px] before:pointer-events-none",
+    "glowing_card_border": "border border-sky-500/30 hover:border-sky-400/60 transition-all duration-300 shadow-[0_0_15px_rgba(14,165,233,0.15)]",
+    "pulsing_radar_dot": "animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"
+  },
+  "key_features_to_build": [
+    {
+      "name": "SaaS Shell Navigation",
+      "description": "Left sidebar with brand logo mark ('AegisNet' SVG shield node logo), live system status indicator (ONLINE - GATEWAY #1 ACTIVE), navigation tabs (Dashboard, Floor Map & Doors, NVR Live Feeds, Employee Enrollment, Access Devices, Real-time Events Log), top header with search, active building selector (e.g., HQ North Tower - Floor 4), active alerts pill, and security officer profile."
+    },
+    {
+      "name": "SOC Live Dashboard",
+      "description": "High-density grid layout with 4 summary stat widgets (People Inside: 142/200, Doors Online: 18/20, Active NVR Cameras: 12/12, Critical Security Alerts: 02), real-time live events feed with granting/denial pulses, interactive floor map quick widget with door remote trigger, and mini camera matrix."
+    },
+    {
+      "name": "Interactive Building Floor Map",
+      "description": "Stylized interactive vector blueprint layout of Floor 4 (Lobby, Server Room, Exec Suite, Parking Gate, Emergency Exit). Interactive door nodes pinned on layout showing real-time state (Locked - Cyan glow, Unlocked - Emerald, Alarm - Red flash, Remote Open - Pulsing). Click any door to trigger remote unlock with countdown, override controls, and view assigned NVR camera stream."
+    },
+    {
+      "name": "NVR Real-Time Video Grid",
+      "description": "4 to 8 channel camera feed grid with dark surveillance aesthetic, live timestamp overlay, camera names (CAM-01 LOBBY MAIN, CAM-02 SERVER ROOM, CAM-03 PARKING B1, CAM-04 EXEC CORRIDOR), recording state dot (REC red pulse), full screen zoom modal, motion detection indicators, and PTZ control overlay."
+    },
+    {
+      "name": "Employee Enrollment & Biometrics Sync",
+      "description": "Manage personnel access list with high-res headshot avatars, card RFID numbers (e.g., RFID-994021), facial recognition embedding vector status ('FACE SYNCED - 99.8% match'), access level badges, and modal to enroll new employee (upload photo, simulate facial scan capture with grid overlay, assign card reader access, sync with physical gateways)."
+    },
+    {
+      "name": "Access Devices & Gateway Manager",
+      "description": "Hardware matrix showing connected Gateways, NVR units, Facial Scanners, and RFID Card Readers. Details include IP address, firmware version, online/offline status badge, signal strength, and sync trigger button."
+    },
+    {
+      "name": "Real-time Access Events Log",
+      "description": "Searchable and filterable audit log of every entry attempt. Filter by Door, Access Granted/Denied, Biometric vs Card, Time range. Live stream switch to toggle incoming fake events dynamically."
+    }
+  ],
+  "image_urls": {
+    "cctv_feeds": [
+      {
+        "url": "https://images.unsplash.com/photo-1787995588763-b6d0781e390f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHwzfHxzZWN1cml0eSUyMHN1cnZlaWxsYW5jZSUyMGNjdHYlMjBjYW1lcmElMjBmZWVkJTIwZGFyayUyMGxvYmJ5JTIwY29ycmlkb3IlMjBwYXJraW5nfGVufDB8fHx8MTc5MDU0MDA3MXww&ixlib=rb-4.1.0&q=85",
+        "label": "CAM-01 Main Lobby Observation Deck",
+        "location": "Main Lobby"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1762779943673-fcb177e7fe56?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHwyfHxzZWN1cml0eSUyMHN1cnZlaWxsYW5jZSUyMGNjdHYlMjBjYW1lcmElMjBmZWVkJTIwZGFyayUyMGxvYmJ5JTIwY29ycmlkb3IlMjBwYXJraW5nfGVufDB8fHx8MTc5MDU0MDA3MXww&ixlib=rb-4.1.0&q=85",
+        "label": "CAM-02 Executive Corridor West",
+        "location": "Exec Corridor"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1787995588886-e87f5f207909?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHw0fHxzZWN1cml0eSUyMHN1cnZlaWxsYW5jZSUyMGNjdHYlMjBjYW1lcmElMjBmZWVkJTIwZGFyayUyMGxvYmJ5JTIwY29ycmlkb3IlMjBwYXJraW5nfGVufDB8fHx8MTc5MDU0MDA3MXww&ixlib=rb-4.1.0&q=85",
+        "label": "CAM-03 Terminal South Gate",
+        "location": "South Access"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1779727279604-19ebb58b8b83?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1OTV8MHwxfHNlYXJjaHwxfHxzZWN1cml0eSUyMHN1cnZlaWxsYW5jZSUyMGNjdHYlMjBjYW1lcmElMjBmZWVkJTIwZGFyayUyMGxvYmJ5JTIwY29ycmlkb3IlMjBwYXJraW5nfGVufDB8fHx8MTc5MDU0MDA3MXww&ixlib=rb-4.1.0&q=85",
+        "label": "CAM-04 Server Room Secure Vault",
+        "location": "Server Vault"
+      }
+    ],
+    "employee_portraits": [
+      {
+        "url": "https://images.unsplash.com/photo-1560250097-0b93528c311a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBlbXBsb3llZSUyMHBvcnRyYWl0JTIwaGVhZHNob3QlMjBhdmF0YXJ8ZW58MHx8fHwxNzkwNTQwMDcxfDA&ixlib=rb-4.1.0&q=85",
+        "name": "Marcus Vance",
+        "role": "Chief Security Architect",
+        "card_no": "RFID-883901",
+        "face_sync": true
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBlbXBsb3llZSUyMHBvcnRyYWl0JTIwaGVhZHNob3QlMjBhdmF0YXJ8ZW58MHx8fHwxNzkwNTQwMDcxfDA&ixlib=rb-4.1.0&q=85",
+        "name": "Elena Rostova",
+        "role": "Lead Ops Officer",
+        "card_no": "RFID-441209",
+        "face_sync": true
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1573497019940-1c28c88b4f3e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHwyfHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBlbXBsb3llZSUyMHBvcnRyYWl0JTIwaGVhZHNob3QlMjBhdmF0YXJ8ZW58MHx8fHwxNzkwNTQwMDcxfDA&ixlib=rb-4.1.0&q=85",
+        "name": "Sarah Chen",
+        "role": "Infrastructure Engineer",
+        "card_no": "RFID-229104",
+        "face_sync": true
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDN8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBjb3Jwb3JhdGUlMjBlbXBsb3llZSUyMHBvcnRyYWl0JTIwaGVhZHNob3QlMjBhdmF0YXJ8ZW58MHx8fHwxNzkwNTQwMDcxfDA&ixlib=rb-4.1.0&q=85",
+        "name": "David Miller",
+        "role": "Facilities Operations",
+        "card_no": "RFID-665182",
+        "face_sync": false
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Ensure all interactive components (buttons, tabs, inputs, door nodes, action triggers) contain 'data-testid' attributes (e.g., data-testid='door-unlock-btn-01', data-testid='employee-enroll-modal-submit').",
+    "Use dark background (#050811) with deep blue gradients and electric blue (#06b6d4) glows across all cards and map nodes.",
+    "Implement Lucide React icons for tactical security representation (Shield, Lock, Unlock, Camera, Cpu, Wifi, Radio, UserCheck, AlertTriangle, Key, Layers).",
+    "Ensure non-transparent backgrounds on all drop downs, modals, popovers, and overlays (use bg-[#0f172a] or bg-[#0b1220] with backdrop-blur).",
+    "Add interactive micro-feedback: Sonner toasts when remote opening doors, triggering biometrics sync, or adding new employees.",
+    "Keep code pure JavaScript / JSX, avoiding TypeScript definitions since target files are .js/.jsx."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy",
+    "Use glass-morphism effects with backdrop filters (12-24px blur)",
+    "You MUST NOT apply universal transition. Eg: transition: all. This results in breaking transforms. Always add transitions for specific interactive elements like button, input excluding transforms",
+    "You MUST NOT center align the app container, ie do not add .App { text-align: center; } in the css file. This disrupts the human natural reading flow of text",
+    "Always use modern button styles like pill-shaped, or sharp button with interaction animations & color relevant to the app style",
+    "NEVER: use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 etc for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations. Static = dead.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Subtle grain textures, noise overlays, custom cursors, selection states, and loading animations: separates good from extraordinary.",
+    "Main agent relies on these image URLs. Missing categories (especially sponsor logos) = main agent will use placeholder text which is FORBIDDEN"
+  ]
+}

@@ -1,0 +1,282 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@500;600;700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Rajdhani:wght@500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+    :root {
+        --background: 224 57% 5%;
+        --foreground: 210 40% 96%;
+        --card: 222 47% 8%;
+        --card-foreground: 210 40% 96%;
+        --popover: 222 47% 7%;
+        --popover-foreground: 210 40% 96%;
+        --primary: 199 89% 48%;
+        --primary-foreground: 222 47% 6%;
+        --secondary: 217 33% 14%;
+        --secondary-foreground: 210 40% 96%;
+        --muted: 217 33% 14%;
+        --muted-foreground: 215 20% 58%;
+        --accent: 199 89% 48%;
+        --accent-foreground: 210 40% 98%;
+        --destructive: 0 72% 51%;
+        --destructive-foreground: 210 40% 98%;
+        --border: 217 33% 17%;
+        --input: 217 33% 17%;
+        --ring: 199 89% 48%;
+        --radius: 0.5rem;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    html {
+        scroll-behavior: auto;
+    }
+    body {
+        @apply bg-background text-foreground;
+        font-family: 'Plus Jakarta Sans', sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        background-color: #050811;
+    }
+    ::selection {
+        background: rgba(56, 189, 248, 0.35);
+        color: #f8fafc;
+    }
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #070b16;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #1e293b;
+        border-radius: 8px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: rgba(56, 189, 248, 0.4);
+    }
+    [data-debug-wrapper='true'] {
+        display: contents !important;
+    }
+}
+
+@layer components {
+    .font-display {
+        font-family: 'Orbitron', sans-serif;
+    }
+    .font-head {
+        font-family: 'Rajdhani', sans-serif;
+    }
+    .mono {
+        font-family: 'JetBrains Mono', monospace;
+    }
+    .aegis-panel {
+        background: linear-gradient(160deg, rgba(15, 23, 42, 0.72), rgba(11, 18, 32, 0.88));
+        border: 1px solid rgba(56, 189, 248, 0.14);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.42);
+        backdrop-filter: blur(14px);
+    }
+    .aegis-panel-glow {
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        box-shadow: 0 0 24px rgba(14, 165, 233, 0.12), 0 8px 32px rgba(0, 0, 0, 0.42);
+    }
+    .bg-grid {
+        background-image: linear-gradient(to right, rgba(30, 58, 138, 0.14) 1px, transparent 1px),
+            linear-gradient(to bottom, rgba(30, 58, 138, 0.14) 1px, transparent 1px);
+        background-size: 26px 26px;
+    }
+    .noise-overlay {
+        position: relative;
+    }
+    .noise-overlay::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.05;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        z-index: 1;
+    }
+    .scanlines::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.28) 50%);
+        background-size: 100% 4px;
+        z-index: 5;
+    }
+    .text-glow {
+        text-shadow: 0 0 22px rgba(56, 189, 248, 0.55);
+    }
+    .corner-frame {
+        position: relative;
+    }
+    .corner-frame::before,
+    .corner-frame::after {
+        content: '';
+        position: absolute;
+        width: 14px;
+        height: 14px;
+        border-color: rgba(56, 189, 248, 0.6);
+        z-index: 6;
+        pointer-events: none;
+    }
+    .corner-frame::before {
+        top: -1px;
+        left: -1px;
+        border-top: 2px solid;
+        border-left: 2px solid;
+    }
+    .corner-frame::after {
+        bottom: -1px;
+        right: -1px;
+        border-bottom: 2px solid;
+        border-right: 2px solid;
+    }
+}
+
+/* marquee */
+@keyframes aegis-marquee {
+    to {
+        transform: translateX(-50%);
+    }
+}
+.marquee-track {
+    display: flex;
+    width: max-content;
+    animation: aegis-marquee 42s linear infinite;
+}
+
+/* radar sweep */
+@keyframes radar-rotate {
+    to {
+        transform: rotate(360deg);
+    }
+}
+.radar-sweep {
+    animation: radar-rotate 7s linear infinite;
+    transform-origin: center;
+}
+
+/* door node ping */
+@keyframes node-ping {
+    0% {
+        transform: scale(1);
+        opacity: 0.8;
+    }
+    80%,
+    100% {
+        transform: scale(2.6);
+        opacity: 0;
+    }
+}
+.node-ping {
+    animation: node-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* alarm flash */
+@keyframes alarm-flash {
+    0%,
+    100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.35;
+    }
+}
+.alarm-flash {
+    animation: alarm-flash 0.9s ease-in-out infinite;
+}
+
+/* face scan line */
+@keyframes scan-y {
+    0% {
+        top: 4%;
+    }
+    50% {
+        top: 92%;
+    }
+    100% {
+        top: 4%;
+    }
+}
+.scan-line {
+    animation: scan-y 1.6s ease-in-out infinite;
+}
+
+/* cctv static noise */
+@keyframes static-jitter {
+    0% {
+        background-position: 0 0;
+    }
+    20% {
+        background-position: -40px 30px;
+    }
+    40% {
+        background-position: 30px -50px;
+    }
+    60% {
+        background-position: -60px -20px;
+    }
+    80% {
+        background-position: 50px 40px;
+    }
+    100% {
+        background-position: 0 0;
+    }
+}
+.static-noise {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.95' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation: static-jitter 0.35s steps(5) infinite;
+}
+
+@keyframes rec-blink {
+    0%,
+    60% {
+        opacity: 1;
+    }
+    61%,
+    100% {
+        opacity: 0.15;
+    }
+}
+.rec-blink {
+    animation: rec-blink 1.2s steps(1) infinite;
+}
+
+@keyframes motion-flicker {
+    0%,
+    100% {
+        opacity: 0.25;
+    }
+    8% {
+        opacity: 1;
+    }
+    16% {
+        opacity: 0.25;
+    }
+}
+.motion-flicker {
+    animation: motion-flicker 6s linear infinite;
+}
+
+@keyframes rise-in {
+    from {
+        opacity: 0;
+        transform: translateY(18px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+.rise-in {
+    animation: rise-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}

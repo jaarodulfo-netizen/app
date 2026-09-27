@@ -1,0 +1,49 @@
+# AegisNet · Security Command OS — PRD
+
+## Original Problem Statement
+"lets create a SAAS where i can connect it through a gateway to check building access, map layout to place doors and open them remotely, need to add nvrs to be able to view video in real time, need to be able to enroll new employees and add card number, face and sincronize it with our facial scanners and card readers, need to have real time events of access on the building... but i just want the design of the saas page... technologic, good looking, like a professional security app and not just another web page"
+
+User choices: design-only first version; black background with blueish degrading colors.
+
+## Product
+AegisNet Security Command OS — a dark, SOC-grade SaaS interface for building access control: gateways, door remote control, NVR live video, biometric + RFID enrollment, and a real-time access event audit trail.
+
+## User Personas
+- Security operations officer monitoring a building live
+- Facility admin enrolling employees and managing hardware
+- Shift commander reviewing access audit trails
+
+## Architecture
+- Frontend-only React SPA (design-first, all data simulated client-side)
+- `/app/frontend/src/context/SecurityContext.jsx` — live state: doors, events stream (5.2s generator), employees, remote-open actions
+- `/app/frontend/src/data/mockData.js` — cameras, doors, employees, devices, event generator
+- Pages: Dashboard, FloorMap, LiveFeeds, Employees, Devices, Events
+- Components: Sidebar, Topbar, FloorPlan (SVG blueprint), EventsFeed, PageHeader, Logo (SVG mark, also favicon)
+- Styling: Tailwind + custom theme in index.css (Orbitron/Rajdhani/Plus Jakarta Sans/JetBrains Mono, scanlines, grid, noise, marquee, radar sweep)
+- Motion: framer-motion (masked hero reveal, staggered panels, event row entrances), lenis smooth scroll
+- Backend (FastAPI/MongoDB) untouched — reserved for real gateway/NVR integration
+
+## Implemented (2026-07 / build 1)
+- Dashboard: kinetic masked hero reveal, animated stat counters, live events feed, mini door grid, gateway mesh health, NVR quick view, editorial marquee
+- Floor Map: SVG blueprint of Floor 04 with 8 pulsing door nodes (locked/unlocked/alarm/releasing), door detail panel with assigned camera feed, remote open with latch-release animation + 10s auto-relock, alarm silence
+- Live Feeds: 6-channel NVR grid (4 live CCTV-treated feeds + 2 NO SIGNAL static channels), REC blinking, live timestamps, motion badges, PTZ hover controls, fullscreen channel modal
+- Employees: credential cards (photo, RFID, face-sync %, access level), copy card number, per-user device sync, enroll modal with animated face-capture scan and auto card generation
+- Devices: gateway/NVR/facial scanner/card reader matrix with IP, firmware, signal bars, online/degraded/offline states, sync actions
+- Events Log: searchable/filterable (door, result, method) live audit trail with stream pause toggle and export stub
+- All verified via Playwright: page loads, door remote open + toast, camera zoom modal, full enroll flow (scan → submit → card appears), events filtering, devices page
+
+## Mocked / Not Real Yet
+- ALL data is simulated (no real gateway, NVR, scanner, or reader connectivity)
+- No backend persistence; state resets on reload
+- No authentication
+- Video tiles are treated stills, not RTSP streams
+
+## Backlog
+- P0: Real backend (FastAPI + MongoDB) persisting employees, doors, events
+- P0: Auth (login for officers/admins)
+- P1: Gateway integration layer (WebSocket/MQTT) for real door controllers + real event stream
+- P1: NVR RTSP/ONVIF stream proxy for true live video
+- P1: Face enrollment via device camera capture
+- P2: Multi-building/floor switching, door scheduling, anti-passback rules engine
+- P2: Alert rules + notifications (email/SMS), CSV/PDF audit export
+- P2: Occupancy analytics and heatmaps
