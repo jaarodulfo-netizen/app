@@ -9,6 +9,14 @@ import { api } from '../context/AuthContext';
 
 const METHOD_ICON = { FACE: ScanFace, CARD: CreditCard, REMOTE: Radio };
 
+const sourceLabel = (e) => {
+    const detail = String(e?.detail || '').toUpperCase();
+    if (detail.includes('BUTTON')) return 'BUTTON';
+    if (detail.includes('LOCK')) return 'MAGNET';
+    if (e?.method === 'CARD' || e?.cardNo) return 'CARD';
+    return 'CARD';
+};
+
 export default function Events() {
     const { events, live, setLive, doors } = useSecurity();
     const [q, setQ] = useState('');
@@ -148,7 +156,7 @@ export default function Events() {
                                 >
                                     <span className="mono text-xs text-slate-400 tabular-nums">{dayjs(e.ts).format('HH:mm:ss')}</span>
                                     <div className="min-w-0">
-                                        <p className="text-sm font-semibold text-slate-200 truncate">{e.person}</p>
+                                        <p className="text-sm font-semibold text-slate-200 truncate">{sourceLabel(e)}</p>
                                         <p className="mono text-[9px] text-slate-600 tracking-wider mt-0.5 sm:hidden">{e.doorCode}</p>
                                     </div>
                                     <div className="hidden sm:block min-w-0">
