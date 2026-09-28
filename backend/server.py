@@ -47,6 +47,15 @@ db = client[os.environ['DB_NAME']]
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
+
+@app.get("/health")
+async def health():
+    return {
+        "ok": True,
+        "service": "kerma-security-v2",
+        "gateway_connected": "kerma-monterrey" in gateway_connections if "gateway_connections" in globals() else False,
+    }
+
 JWT_ALGORITHM = "HS256"
 ALLOWED_DOMAINS = {"kermagames.com", "trivelta.com"}
 ACCESS_TTL = timedelta(hours=12)
@@ -823,9 +832,15 @@ gateway_connections: dict[str, WebSocket] = {}
 gateway_pending: dict[str, asyncio.Future] = {}
 
 
-def gateway_event_doc(event: dict) -> dict:
+async def gateway_event_doc(event: dict) -> dict:
     when = parse_time(event.get("time"))
-    person = event.get("personName") or event.get("personId") or (("CARD " + str(event.get("cardNo"))) if event.get("cardNo") else "UNKNOWN CREDENTIAL")
+    card_no = str(event.get("cardNo")) if event.get("cardNo") is not None else None
+    person = event.get("personName") or event.get("personId")
+    if card_no and not person:
+        employee = await db.employees.find_one({"$or": [{"cardNo": card_no}, {"cardNos": card_no}]})
+        if employee:
+            person = employee.get("name")
+    person = person or (("CARD " + card_no) if card_no else "UNKNOWN CREDENTIAL")
     gateway_device_id = event.get("deviceId")
     device_name = event.get("deviceName") or gateway_device_id or "UNKNOWN DEVICE"
     door_no = event.get("doorNo")
@@ -838,7 +853,7 @@ def gateway_event_doc(event: dict) -> dict:
     return {
         "person": person,
         "personId": event.get("personId"),
-        "cardNo": str(event.get("cardNo")) if event.get("cardNo") is not None else None,
+        "cardNo": card_no,
         "door": device_name if door_no is None else f"{device_name} · Door {door_no}",
         "doorCode": f"{gateway_device_id or 'device'}:{door_no or 1}",
         "zone": "",
@@ -909,7 +924,7 @@ async def gateway_socket(websocket: WebSocket):
 
             if msg_type == "event":
                 event = msg.get("event") or {}
-                doc = gateway_event_doc(event)
+                doc = await gateway_event_doc(event)
                 try:
                     await db.events.insert_one(doc)
                 except Exception as e:
