@@ -9,7 +9,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from bson import ObjectId
@@ -51,52 +51,38 @@ ACTIVE_WINDOW = timedelta(minutes=30)
 
 logger = logging.getLogger(__name__)
 
-# --- Object storage ---
-STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
-STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
-EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+# --- Object storage (MongoDB GridFS) ---
 APP_NAME = "kerma-secure"
-storage_key = None
+file_bucket = AsyncIOMotorGridFSBucket(db, bucket_name="kerma_files")
 
 
-def init_storage(force: bool = False):
-    global storage_key
-    if storage_key and not force:
-        return storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
-    resp.raise_for_status()
-    storage_key = resp.json()["storage_key"]
-    return storage_key
-
-
-def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data,
-        timeout=120,
+async def put_object(path: str, data: bytes, content_type: str) -> dict:
+    existing = await db.kerma_file_index.find_one({"path": path})
+    if existing:
+        try:
+            await file_bucket.delete(existing["gridfs_id"])
+        except Exception:
+            pass
+    gridfs_id = await file_bucket.upload_from_stream(
+        path,
+        data,
+        metadata={"content_type": content_type},
     )
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.put(
-            f"{STORAGE_URL}/objects/{path}",
-            headers={"X-Storage-Key": key, "Content-Type": content_type},
-            data=data,
-            timeout=120,
-        )
-    resp.raise_for_status()
-    return resp.json()
+    await db.kerma_file_index.update_one(
+        {"path": path},
+        {"$set": {"path": path, "gridfs_id": gridfs_id, "content_type": content_type, "size": len(data)}},
+        upsert=True,
+    )
+    return {"path": path, "size": len(data)}
 
 
-def get_object(path: str):
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    if resp.status_code == 404:
-        key = init_storage(force=True)
-        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+async def get_object(path: str):
+    record = await db.kerma_file_index.find_one({"path": path})
+    if not record:
+        raise FileNotFoundError(path)
+    stream = await file_bucket.open_download_stream(record["gridfs_id"])
+    data = await stream.read()
+    return data, record.get("content_type", "application/octet-stream")
 
 
 class StatusCheck(BaseModel):
@@ -709,7 +695,7 @@ async def upload_photo(file: UploadFile = File(...), user=Depends(get_current_us
     if ext not in {"jpg", "jpeg", "png", "webp"}:
         ext = "jpg"
     path = f"{APP_NAME}/photos/{user['_id'] if isinstance(user.get('_id'), str) else str(user['_id'])}/{uuid.uuid4()}.{ext}"
-    result = await run_in_threadpool(put_object, path, data, file.content_type)
+    result = await put_object(path, data, file.content_type)
     await db.files.insert_one(
         {
             "storage_path": result["path"],
@@ -739,7 +725,7 @@ async def serve_file(path: str, request: Request):
     record = await db.files.find_one({"storage_path": path, "is_deleted": False})
     if not record:
         raise HTTPException(status_code=404, detail="File not found")
-    data, content_type = await run_in_threadpool(get_object, path)
+    data, content_type = await get_object(path)
     return Response(content=data, media_type=record.get("content_type", content_type))
 
 
@@ -900,11 +886,7 @@ async def startup():
     await db.events.create_index("dedupeKey", unique=True)
     await db.events.create_index("time")
     HLS_ROOT.mkdir(parents=True, exist_ok=True)
-    try:
-        await run_in_threadpool(init_storage)
-        logger.info("Object storage initialized")
-    except Exception as e:
-        logger.error("Storage init failed: %s", e)
+    await db.kerma_file_index.create_index("path", unique=True)
     admin_email = os.environ["ADMIN_EMAIL"].strip().lower()
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
