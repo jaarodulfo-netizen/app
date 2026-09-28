@@ -1,7 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { api } from './AuthContext';
-import { DOORS } from '../data/mockData';
 
 const SecurityContext = createContext(null);
 
@@ -28,7 +27,7 @@ function localEvent(employees, doors) {
 }
 
 export function SecurityProvider({ children }) {
-    const [doors, setDoors] = useState(DOORS);
+    const [doors, setDoors] = useState([]);
     const [employees, setEmployees] = useState(null);
     const [cameras, setCameras] = useState(null);
     const [devices, setDevices] = useState(null);
@@ -43,11 +42,12 @@ export function SecurityProvider({ children }) {
     employeesRef.current = employees || [];
 
     useEffect(() => {
-        Promise.all([api.get('/employees'), api.get('/cameras'), api.get('/devices')])
-            .then(([e, c, d]) => {
+        Promise.all([api.get('/employees'), api.get('/cameras'), api.get('/devices'), api.get('/doors')])
+            .then(([e, c, d, dr]) => {
                 setEmployees(e.data);
                 setCameras(c.data);
                 setDevices(d.data);
+                setDoors(dr.data);
             })
             .catch(() => {
                 setEmployees([]);
@@ -61,6 +61,7 @@ export function SecurityProvider({ children }) {
     useEffect(() => {
         const t = setInterval(() => {
             if (!liveRef.current) return;
+            if (!doorsRef.current.length) return;
             const e = localEvent(employeesRef.current, doorsRef.current);
             pushEvent(e);
             if (e.result === 'denied') {
@@ -136,6 +137,23 @@ export function SecurityProvider({ children }) {
         setCameras((prev) => (prev || []).map((c) => (c.nvr === id ? { ...c, nvr: '' } : c)));
     }, []);
 
+    const addDoor = useCallback(async (door) => {
+        const { data } = await api.post('/doors', door);
+        setDoors((prev) => [...prev, data]);
+        return data;
+    }, []);
+
+    const updateDoor = useCallback(async (id, updates) => {
+        const { data } = await api.put(`/doors/${id}`, updates);
+        setDoors((prev) => prev.map((d) => (d.id === id ? { ...d, ...data } : d)));
+        return data;
+    }, []);
+
+    const deleteDoor = useCallback(async (id) => {
+        await api.delete(`/doors/${id}`);
+        setDoors((prev) => prev.filter((d) => d.id !== id));
+    }, []);
+
     return (
         <SecurityContext.Provider
             value={{
@@ -154,6 +172,9 @@ export function SecurityProvider({ children }) {
                 deleteCamera,
                 addDevice,
                 deleteDevice,
+                addDoor,
+                updateDoor,
+                deleteDoor,
             }}
         >
             {children}

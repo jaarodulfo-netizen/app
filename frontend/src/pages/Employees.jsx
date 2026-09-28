@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ScanFace, X, Copy, RefreshCw, UserPlus, Check, Sparkles, Trash2, Loader2 } from 'lucide-react';
+import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
+import { api, fileUrl } from '../context/AuthContext';
 
 function Avatar({ emp, size = 'h-14 w-14' }) {
-    if (emp.img) {
-        return <img src={emp.img} alt={emp.name} className={`${size} rounded-lg object-cover ring-1 ring-sky-500/30`} />;
+    if (emp.photoPath) {
+        return <img src={fileUrl(emp.photoPath)} alt={emp.name} className={`${size} rounded-lg object-cover ring-1 ring-[#ea7f2b]/40`} />;
     }
     const initials = emp.name.trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
     return (
@@ -44,10 +45,13 @@ function EnrollModal({ open, onClose }) {
     const [role, setRole] = useState('');
     const [level, setLevel] = useState('L1 · GENERAL');
     const [cardNo, setCardNo] = useState('');
+    const [photo, setPhoto] = useState(null);
+    const [photoPreview, setPhotoPreview] = useState(null);
     const [faceState, setFaceState] = useState('idle');
     const [progress, setProgress] = useState(0);
     const [match, setMatch] = useState(null);
     const [saving, setSaving] = useState(false);
+    const fileRef = useRef(null);
 
     useEffect(() => {
         if (faceState !== 'scanning') return;
@@ -66,13 +70,32 @@ function EnrollModal({ open, onClose }) {
     }, [faceState]);
 
     const reset = () => {
-        setName(''); setRole(''); setLevel('L1 · GENERAL'); setCardNo(''); setFaceState('idle'); setProgress(0); setMatch(null);
+        setName(''); setRole(''); setLevel('L1 · GENERAL'); setCardNo('');
+        setPhoto(null);
+        if (photoPreview) URL.revokeObjectURL(photoPreview);
+        setPhotoPreview(null);
+        setFaceState('idle'); setProgress(0); setMatch(null);
+    };
+
+    const pickPhoto = (e) => {
+        const f = e.target.files?.[0];
+        if (!f) return;
+        if (photoPreview) URL.revokeObjectURL(photoPreview);
+        setPhoto(f);
+        setPhotoPreview(URL.createObjectURL(f));
     };
 
     const submit = async () => {
         setSaving(true);
         try {
-            await addEmployee({ name: name.trim(), role: role.trim() || 'Staff Member', cardNo, faceSync: true, faceMatch: match, level });
+            let photoPath = null;
+            if (photo) {
+                const fd = new FormData();
+                fd.append('file', photo);
+                const { data } = await api.post('/upload/photo', fd);
+                photoPath = data.path;
+            }
+            await addEmployee({ name: name.trim(), role: role.trim() || 'Staff Member', cardNo, faceSync: true, faceMatch: match, level, photoPath });
             toast.success('PROFILE SYNCHRONIZED', { description: `${name} saved to registry · ready to push to scanners` });
             reset();
             onClose();
@@ -110,6 +133,29 @@ function EnrollModal({ open, onClose }) {
 
                         <div className="grid sm:grid-cols-2 gap-6 mt-7">
                             <div className="space-y-4">
+                                <div className="flex items-center gap-4">
+                                    <button
+                                        data-testid="enroll-photo-btn"
+                                        onClick={() => fileRef.current?.click()}
+                                        className="relative h-20 w-20 shrink-0 rounded-xl border border-dashed border-sky-500/40 bg-white/[0.03] overflow-hidden group transition-colors duration-200 hover:border-[#ea7f2b]/60"
+                                    >
+                                        {photoPreview ? (
+                                            <img src={photoPreview} alt="Preview" className="h-full w-full object-cover" />
+                                        ) : (
+                                            <span className="absolute inset-0 flex flex-col items-center justify-center gap-1">
+                                                <ImagePlus size={18} className="text-sky-400" />
+                                            </span>
+                                        )}
+                                        <span className="absolute inset-x-0 bottom-0 bg-black/60 mono text-[8px] tracking-widest text-sky-200 py-0.5 text-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+                                            {photoPreview ? 'CHANGE' : 'PHOTO'}
+                                        </span>
+                                    </button>
+                                    <div>
+                                        <p className="mono text-[10px] tracking-widest text-slate-500">ID PHOTO · OPTIONAL</p>
+                                        <p className="text-xs text-slate-500 mt-1">JPG/PNG up to 5MB. Shown on the credential card.</p>
+                                    </div>
+                                    <input ref={fileRef} data-testid="enroll-photo-input" type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
+                                </div>
                                 <div>
                                     <label className="mono text-[10px] tracking-widest text-slate-500">FULL NAME</label>
                                     <input
@@ -174,7 +220,11 @@ function EnrollModal({ open, onClose }) {
 
                                 {faceState === 'idle' && (
                                     <>
-                                        <ScanFace size={52} className="text-sky-500/70" />
+                                        {photoPreview ? (
+                                            <img src={photoPreview} alt="Face source" className="h-24 w-24 rounded-full object-cover ring-2 ring-sky-400/50" />
+                                        ) : (
+                                            <ScanFace size={52} className="text-sky-500/70" />
+                                        )}
                                         <p className="mono text-[10px] tracking-[0.3em] text-slate-500 mt-4 text-center">BIOMETRIC CAPTURE READY</p>
                                         <button
                                             data-testid="face-capture-btn"
@@ -187,7 +237,11 @@ function EnrollModal({ open, onClose }) {
                                 )}
                                 {faceState === 'scanning' && (
                                     <>
-                                        <ScanFace size={52} className="text-cyan-300" />
+                                        {photoPreview ? (
+                                            <img src={photoPreview} alt="Scanning" className="h-24 w-24 rounded-full object-cover ring-2 ring-cyan-400/70" />
+                                        ) : (
+                                            <ScanFace size={52} className="text-cyan-300" />
+                                        )}
                                         <div className="absolute inset-x-6 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent scan-line shadow-[0_0_16px_rgba(34,211,238,0.8)]" />
                                         <p className="mono text-xs tracking-[0.3em] text-cyan-300 mt-5 tabular-nums">SCANNING · {progress}%</p>
                                         <p className="mono text-[9px] tracking-widest text-slate-600 mt-2">EXTRACTING 512-DIM EMBEDDING</p>

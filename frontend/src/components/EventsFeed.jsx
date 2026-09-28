@@ -8,6 +8,13 @@ dayjs.extend(relativeTime);
 
 export function EventsFeed({ limit = 9 }) {
     const { events } = useSecurity();
+    if (events.length === 0) {
+        return (
+            <div data-testid="events-feed" className="px-5 py-10 text-center">
+                <p className="mono text-[10px] tracking-[0.25em] text-slate-600">AWAITING FIRST ACCESS EVENT…</p>
+            </div>
+        );
+    }
     return (
         <div data-testid="events-feed" className="divide-y divide-white/[0.04]">
             <AnimatePresence initial={false}>

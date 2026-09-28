@@ -63,6 +63,13 @@ AegisNet Security Command OS — a dark, SOC-grade SaaS interface for building a
 - Floor map doors remain a sample layout (door placement editor is a separate future step)
 - Verified: curl CRUD chain (create/list/delete for all three collections) + Playwright e2e (add NVR, enroll + delete employee, add camera, empty states)
 
+## Real Hardware & Layout Management (build 6)
+- Editable floor plan: EDIT LAYOUT mode — click anywhere to place a door (auto code D-XX), rename/zone/delete doors; doors persisted in MongoDB; remote open works on real doors
+- Employee photo upload: object storage (Emergent objstore), POST /api/upload/photo, photos served via /api/files/{path}?auth=token; shown on credential cards (initials fallback)
+- Officer administration: commander can deactivate (revokes sessions instantly, login blocked with clear message) or delete accounts; self-action and last-commander guards; DISABLED badge
+- Cameras accept RTSP URL per channel (Hikvision NVR format hint: /Streaming/Channels/101); RTSP LINKED badge on tiles. Architecture note: single NVR credentials, NVR pulls Hikvision cameras; reachable over VPN as local
+- Verified: curl chain (door CRUD, deactivate→login blocked→reactivate, self-delete guard, photo upload + 200 image/png serve, RTSP store) + Playwright e2e (place/rename/delete door, remote open on real door, officer controls visibility, photo input)
+
 ## Mocked / Not Real Yet
 - ALL data is simulated (no real gateway, NVR, scanner, or reader connectivity)
 - No backend persistence; state resets on reload

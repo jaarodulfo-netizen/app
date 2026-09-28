@@ -5,12 +5,11 @@ import dayjs from 'dayjs';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
-import { DOORS } from '../data/mockData';
 
 const METHOD_ICON = { FACE: ScanFace, CARD: CreditCard, REMOTE: Radio };
 
 export default function Events() {
-    const { events, live, setLive } = useSecurity();
+    const { events, live, setLive, doors } = useSecurity();
     const [q, setQ] = useState('');
     const [door, setDoor] = useState('all');
     const [result, setResult] = useState('all');
@@ -81,7 +80,7 @@ export default function Events() {
                         className="rounded-lg border border-white/10 bg-[#0f172a] px-4 py-2.5 text-sm text-slate-200 focus:outline-none focus:border-sky-400/60"
                     >
                         <option value="all">ALL DOORS</option>
-                        {DOORS.map((d) => (
+                        {(doors || []).map((d) => (
                             <option key={d.id} value={d.name}>
                                 {d.code} · {d.name}
                             </option>

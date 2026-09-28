@@ -85,6 +85,12 @@ function CamTile({ cam, onZoom, onDelete, large = false }) {
                 </div>
             )}
 
+            {cam.rtsp && (
+                <span className="absolute left-3 top-9 z-10 mono text-[8px] tracking-widest text-gold border border-[#ea7f2b]/40 bg-[#ea7f2b]/10 rounded px-1.5 py-0.5">
+                    RTSP LINKED
+                </span>
+            )}
+
             <span className={`absolute left-3 top-2.5 flex items-center gap-1.5 mono text-[10px] tracking-widest ${live ? 'text-red-400' : 'text-slate-600'}`}>
                 <span className={`h-1.5 w-1.5 rounded-full ${live ? 'bg-red-500 rec-blink' : 'bg-slate-700'}`} />
                 {live ? 'REC' : 'OFF'}
@@ -111,6 +117,7 @@ function AddCameraModal({ open, onClose }) {
     const [label, setLabel] = useState('');
     const [location, setLocation] = useState('');
     const [nvr, setNvr] = useState('');
+    const [rtsp, setRtsp] = useState('');
     const [img, setImg] = useState('');
     const [saving, setSaving] = useState(false);
 
@@ -119,9 +126,9 @@ function AddCameraModal({ open, onClose }) {
         setSaving(true);
         try {
             const nvrDoc = nvrs.find((n) => n.id === nvr);
-            await addCamera({ label: label.trim().toUpperCase(), location: location.trim(), nvr, nvrName: nvrDoc?.name || '', img: img.trim() || null });
+            await addCamera({ label: label.trim().toUpperCase(), location: location.trim(), nvr, nvrName: nvrDoc?.name || '', rtsp: rtsp.trim(), img: img.trim() || null });
             toast.success('CAMERA REGISTERED', { description: label.toUpperCase() });
-            setLabel(''); setLocation(''); setNvr(''); setImg('');
+            setLabel(''); setLocation(''); setNvr(''); setRtsp(''); setImg('');
             onClose();
         } catch (err) {
             toast.error('REGISTER FAILED', { description: 'Could not save camera — try again' });
@@ -173,6 +180,12 @@ function AddCameraModal({ open, onClose }) {
                                     ))}
                                 </select>
                                 {nvrs.length === 0 && <p className="mono text-[9px] tracking-wider text-orange-300/80 mt-2">NO NVRS YET · ADD ONE IN ACCESS DEVICES</p>}
+                            </div>
+                            <div>
+                                <label className="mono text-[10px] tracking-widest text-slate-500">RTSP STREAM URL · FROM YOUR NVR</label>
+                                <input data-testid="camera-rtsp-input" value={rtsp} onChange={(e) => setRtsp(e.target.value)} placeholder="rtsp://usuario:clave@10.4.0.21:554/Streaming/Channels/101"
+                                    className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 mono text-xs text-sky-200 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60 transition-colors duration-200" />
+                                <p className="mono text-[9px] tracking-wider text-slate-600 mt-2">HIKVISION · CANAL 1 = /101 · CANAL 2 = /201 · SUBSTREAM = /102</p>
                             </div>
                             <div>
                                 <label className="mono text-[10px] tracking-widest text-slate-500">SNAPSHOT URL · OPTIONAL</label>

@@ -13,6 +13,8 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
+export const fileUrl = (path) => (path ? `${API}/files/${path}?auth=${localStorage.getItem('kerma_token')}` : null);
+
 export function formatApiError(detail) {
     if (detail == null) return 'Something went wrong. Please try again.';
     if (typeof detail === 'string') return detail;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { UserPlus, Copy, ShieldCheck, Loader2, ShieldAlert, ChevronDown, MonitorSmartphone, Globe, Clock } from 'lucide-react';
+import { UserPlus, Copy, ShieldCheck, Loader2, ShieldAlert, ChevronDown, MonitorSmartphone, Globe, Clock, Power, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -64,6 +64,7 @@ export default function Officers() {
     const [error, setError] = useState('');
     const [created, setCreated] = useState(null);
     const [expanded, setExpanded] = useState(null);
+    const [deleteArmed, setDeleteArmed] = useState(null);
 
     const load = () => api.get('/auth/officers').then((r) => setOfficers(r.data)).catch(() => {});
     useEffect(() => {
@@ -73,6 +74,30 @@ export default function Officers() {
             return () => clearInterval(t);
         }
     }, [user]);
+
+    const toggleActive = async (o) => {
+        try {
+            await api.patch(`/auth/officers/${o.id}`, { active: !o.is_active });
+            toast.success(o.is_active ? 'ACCOUNT DEACTIVATED' : 'ACCOUNT REACTIVATED', {
+                description: o.is_active ? `${o.email} · all sessions revoked` : `${o.email} can sign in again`,
+            });
+            load();
+        } catch (err) {
+            toast.error('ACTION BLOCKED', { description: formatApiError(err.response?.data?.detail) });
+        }
+    };
+
+    const removeOfficer = async (o) => {
+        try {
+            await api.delete(`/auth/officers/${o.id}`);
+            toast.success('ACCOUNT DELETED', { description: o.email });
+            setDeleteArmed(null);
+            load();
+        } catch (err) {
+            toast.error('ACTION BLOCKED', { description: formatApiError(err.response?.data?.detail) });
+            setDeleteArmed(null);
+        }
+    };
 
     if (user?.role !== 'commander') {
         return (
@@ -227,13 +252,50 @@ export default function Officers() {
                                     </span>
                                     <span
                                         className={`mono text-[9px] tracking-widest rounded border px-2 py-1 shrink-0 hidden sm:block ${
-                                            o.must_change_password
-                                                ? 'text-orange-300 border-orange-400/30 bg-orange-400/10'
-                                                : 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10'
+                                            !o.is_active
+                                                ? 'text-red-300 border-red-400/30 bg-red-400/10'
+                                                : o.must_change_password
+                                                  ? 'text-orange-300 border-orange-400/30 bg-orange-400/10'
+                                                  : 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10'
                                         }`}
                                     >
-                                        {o.must_change_password ? 'ROTATION PENDING' : 'ACTIVE'}
+                                        {!o.is_active ? 'DISABLED' : o.must_change_password ? 'ROTATION PENDING' : 'ACTIVE'}
                                     </span>
+                                    {o.id !== user?.id && (
+                                        <span className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                                            <button
+                                                data-testid={`toggle-officer-${o.email}`}
+                                                onClick={() => toggleActive(o)}
+                                                title={o.is_active ? 'Deactivate account' : 'Reactivate account'}
+                                                className={`rounded-md border p-1.5 transition-colors duration-200 ${
+                                                    o.is_active
+                                                        ? 'border-white/10 text-slate-500 hover:text-orange-300 hover:border-orange-400/40'
+                                                        : 'border-emerald-400/40 text-emerald-300 hover:bg-emerald-400/10'
+                                                }`}
+                                            >
+                                                <Power size={12} />
+                                            </button>
+                                            <button
+                                                data-testid={`delete-officer-${o.email}`}
+                                                onClick={() => {
+                                                    if (deleteArmed === o.id) {
+                                                        removeOfficer(o);
+                                                    } else {
+                                                        setDeleteArmed(o.id);
+                                                        setTimeout(() => setDeleteArmed((c) => (c === o.id ? null : c)), 2600);
+                                                    }
+                                                }}
+                                                title="Delete account"
+                                                className={`rounded-md border p-1.5 transition-colors duration-200 ${
+                                                    deleteArmed === o.id
+                                                        ? 'border-red-500/60 bg-red-500/15 text-red-300'
+                                                        : 'border-white/10 text-slate-500 hover:text-red-300 hover:border-red-400/40'
+                                                }`}
+                                            >
+                                                <Trash2 size={12} />
+                                            </button>
+                                        </span>
+                                    )}
                                     <ChevronDown size={14} className={`text-slate-500 shrink-0 transition-transform duration-300 ${expanded === o.id ? 'rotate-180' : ''}`} />
                                 </button>
                                 <AnimatePresence initial={false}>

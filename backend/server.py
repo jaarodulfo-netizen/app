@@ -4,12 +4,14 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
+from starlette.concurrency import run_in_threadpool
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Optional
 from bson import ObjectId
 import os
 import logging
@@ -17,6 +19,7 @@ import uuid
 import secrets
 import bcrypt
 import jwt
+import requests
 from datetime import datetime, timezone, timedelta
 
 mongo_url = os.environ['MONGO_URL']
@@ -32,6 +35,53 @@ ACCESS_TTL = timedelta(hours=12)
 ACTIVE_WINDOW = timedelta(minutes=30)
 
 logger = logging.getLogger(__name__)
+
+# --- Object storage ---
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+APP_NAME = "kerma-secure"
+storage_key = None
+
+
+def init_storage(force: bool = False):
+    global storage_key
+    if storage_key and not force:
+        return storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    storage_key = resp.json()["storage_key"]
+    return storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data,
+        timeout=120,
+    )
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = requests.put(
+            f"{STORAGE_URL}/objects/{path}",
+            headers={"X-Storage-Key": key, "Content-Type": content_type},
+            data=data,
+            timeout=120,
+        )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str):
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
 
 
 class StatusCheck(BaseModel):
@@ -58,6 +108,54 @@ class ChangePasswordBody(BaseModel):
 class OfficerCreate(BaseModel):
     email: str
     name: str
+
+
+class OfficerUpdate(BaseModel):
+    active: bool
+
+
+class EmployeeIn(BaseModel):
+    name: str
+    role: str = ""
+    cardNo: str = ""
+    faceSync: bool = False
+    faceMatch: Optional[str] = None
+    level: str = "L1 · GENERAL"
+    photoPath: Optional[str] = None
+
+
+class CameraIn(BaseModel):
+    label: str
+    location: str = ""
+    nvr: str = ""
+    nvrName: str = ""
+    img: Optional[str] = None
+    rtsp: str = ""
+
+
+class DeviceIn(BaseModel):
+    type: str
+    name: str
+    ip: str = ""
+    fw: str = ""
+    detail: str = ""
+    signal: int = 95
+
+
+class DoorIn(BaseModel):
+    name: str
+    zone: str = "GENERAL"
+    x: float
+    y: float
+    camId: Optional[str] = None
+
+
+class DoorUpdate(BaseModel):
+    name: Optional[str] = None
+    zone: Optional[str] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
+    camId: Optional[str] = None
 
 
 def hash_password(password: str) -> str:
@@ -94,10 +192,16 @@ def public_user(u: dict) -> dict:
         "email": u["email"],
         "name": u["name"],
         "role": u["role"],
+        "is_active": u.get("is_active", True),
         "must_change_password": u.get("must_change_password", False),
         "last_login": iso(u.get("last_login")),
         "created_at": iso(u.get("created_at")),
     }
+
+
+def doc_id(d):
+    d["id"] = str(d.pop("_id"))
+    return d
 
 
 def sniff_agent(ua: str) -> str:
@@ -117,13 +221,18 @@ def sniff_agent(ua: str) -> str:
 bearer = HTTPBearer(auto_error=False)
 
 
+def decode_token(token: str) -> dict:
+    payload = jwt.decode(token, os.environ["JWT_SECRET"], algorithms=[JWT_ALGORITHM])
+    if payload.get("type") != "access":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    return payload
+
+
 async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)):
     if not creds:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        payload = jwt.decode(creds.credentials, os.environ["JWT_SECRET"], algorithms=[JWT_ALGORITHM])
-        if payload.get("type") != "access":
-            raise HTTPException(status_code=401, detail="Invalid token type")
+        payload = decode_token(creds.credentials)
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
@@ -131,6 +240,8 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)
     user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account deactivated")
     jti = payload.get("jti")
     if jti:
         session = await db.sessions.find_one({"jti": jti})
@@ -172,6 +283,9 @@ async def login(body: LoginBody, request: Request):
             upsert=True,
         )
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    if not user.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Account deactivated — contact your commander")
 
     await db.login_attempts.delete_one({"identifier": ident})
     now = datetime.now(timezone.utc)
@@ -235,9 +349,11 @@ async def list_officers(user=Depends(require_commander)):
 async def officer_sessions(officer_id: str, user=Depends(require_commander)):
     cutoff = datetime.now(timezone.utc) - ACTIVE_WINDOW
     sessions = await db.sessions.find({"user_id": officer_id}).sort("created_at", -1).to_list(20)
-    def is_active(s):
+
+    def is_active_sess(s):
         ls = s.get("last_seen")
         return bool(ls and ls.replace(tzinfo=timezone.utc) >= cutoff)
+
     return [
         {
             "id": str(s["_id"]),
@@ -245,41 +361,121 @@ async def officer_sessions(officer_id: str, user=Depends(require_commander)):
             "agent": s.get("agent"),
             "created_at": iso(s.get("created_at")),
             "last_seen": iso(s.get("last_seen")),
-            "active": is_active(s),
+            "active": is_active_sess(s),
         }
         for s in sessions
     ]
 
 
-def doc_id(d):
-    d["id"] = str(d.pop("_id"))
-    return d
+@api_router.patch("/auth/officers/{officer_id}")
+async def set_officer_active(officer_id: str, body: OfficerUpdate, user=Depends(require_commander)):
+    target = await db.users.find_one({"_id": ObjectId(officer_id)})
+    if not target:
+        raise HTTPException(status_code=404, detail="Officer not found")
+    if str(target["_id"]) == str(user["_id"]):
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+    if not body.active and target.get("role") == "commander" and target.get("is_active", True):
+        other_commanders = await db.users.count_documents({"role": "commander", "is_active": True, "_id": {"$ne": target["_id"]}})
+        if other_commanders == 0:
+            raise HTTPException(status_code=400, detail="Cannot deactivate the last active commander")
+    await db.users.update_one({"_id": target["_id"]}, {"$set": {"is_active": body.active}})
+    if not body.active:
+        await db.sessions.delete_many({"user_id": str(target["_id"])})
+    updated = await db.users.find_one({"_id": target["_id"]})
+    return public_user(updated)
 
 
-class EmployeeIn(BaseModel):
-    name: str
-    role: str = ""
-    cardNo: str = ""
-    faceSync: bool = False
-    faceMatch: str | None = None
-    level: str = "L1 · GENERAL"
+@api_router.delete("/auth/officers/{officer_id}")
+async def delete_officer(officer_id: str, user=Depends(require_commander)):
+    target = await db.users.find_one({"_id": ObjectId(officer_id)})
+    if not target:
+        raise HTTPException(status_code=404, detail="Officer not found")
+    if str(target["_id"]) == str(user["_id"]):
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    if target.get("role") == "commander":
+        other_commanders = await db.users.count_documents({"role": "commander", "_id": {"$ne": target["_id"]}})
+        if other_commanders == 0:
+            raise HTTPException(status_code=400, detail="Cannot delete the last commander")
+    await db.users.delete_one({"_id": target["_id"]})
+    await db.sessions.delete_many({"user_id": str(target["_id"])})
+    return {"ok": True}
 
 
-class CameraIn(BaseModel):
-    label: str
-    location: str = ""
-    nvr: str = ""
-    img: str | None = None
+@api_router.post("/auth/officers")
+async def create_officer(body: OfficerCreate, user=Depends(require_commander)):
+    email = body.email.strip().lower()
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="Valid email is required")
+    if not domain_allowed(email):
+        raise HTTPException(status_code=403, detail="Only @kermagames.com or @trivelta.com emails are allowed")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+    temp_password = secrets.token_urlsafe(9)
+    doc = {
+        "email": email,
+        "name": name,
+        "password_hash": hash_password(temp_password),
+        "role": "officer",
+        "is_active": True,
+        "must_change_password": True,
+        "created_at": datetime.now(timezone.utc),
+        "created_by": user["email"],
+    }
+    await db.users.insert_one(doc)
+    return {"email": email, "name": name, "role": "officer", "temp_password": temp_password}
 
 
-class DeviceIn(BaseModel):
-    type: str
-    name: str
-    ip: str = ""
-    fw: str = ""
-    detail: str = ""
-    signal: int = 95
+# --- File upload (employee photos) ---
 
+@api_router.post("/upload/photo")
+async def upload_photo(file: UploadFile = File(...), user=Depends(get_current_user)):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="Only image files are allowed")
+    data = await file.read()
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Photo must be under 5MB")
+    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "jpg"
+    if ext not in {"jpg", "jpeg", "png", "webp"}:
+        ext = "jpg"
+    path = f"{APP_NAME}/photos/{user['_id'] if isinstance(user.get('_id'), str) else str(user['_id'])}/{uuid.uuid4()}.{ext}"
+    result = await run_in_threadpool(put_object, path, data, file.content_type)
+    await db.files.insert_one(
+        {
+            "storage_path": result["path"],
+            "original_filename": file.filename,
+            "content_type": file.content_type,
+            "size": result["size"],
+            "is_deleted": False,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    return {"path": result["path"]}
+
+
+@api_router.get("/files/{path:path}")
+async def serve_file(path: str, request: Request):
+    token = request.query_params.get("auth")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        decode_token(token)
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    record = await db.files.find_one({"storage_path": path, "is_deleted": False})
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    data, content_type = await run_in_threadpool(get_object, path)
+    return Response(content=data, media_type=record.get("content_type", content_type))
+
+
+# --- Registry: employees / cameras / devices / doors ---
 
 @api_router.get("/employees")
 async def list_employees(user=Depends(get_current_user)):
@@ -354,7 +550,45 @@ async def delete_device(item_id: str, user=Depends(get_current_user)):
     r = await db.devices.delete_one({"_id": ObjectId(item_id)})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Device not found")
-    await db.cameras.update_many({"nvr": item_id}, {"$set": {"nvr": ""}})
+    await db.cameras.update_many({"nvr": item_id}, {"$set": {"nvr": "", "nvrName": ""}})
+    return {"ok": True}
+
+
+@api_router.get("/doors")
+async def list_doors(user=Depends(get_current_user)):
+    docs = await db.doors.find().sort("created_at", 1).to_list(200)
+    return [doc_id(d) for d in docs]
+
+
+@api_router.post("/doors")
+async def create_door(body: DoorIn, user=Depends(get_current_user)):
+    count = await db.doors.count_documents({})
+    doc = body.model_dump()
+    doc["code"] = f"D-{count + 1:02d}"
+    doc["status"] = "locked"
+    doc["created_at"] = datetime.now(timezone.utc)
+    r = await db.doors.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return doc_id(doc)
+
+
+@api_router.put("/doors/{item_id}")
+async def update_door(item_id: str, body: DoorUpdate, user=Depends(get_current_user)):
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    r = await db.doors.update_one({"_id": ObjectId(item_id)}, {"$set": updates})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Door not found")
+    doc = await db.doors.find_one({"_id": ObjectId(item_id)})
+    return doc_id(doc)
+
+
+@api_router.delete("/doors/{item_id}")
+async def delete_door(item_id: str, user=Depends(get_current_user)):
+    r = await db.doors.delete_one({"_id": ObjectId(item_id)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Door not found")
     return {"ok": True}
 
 
@@ -395,6 +629,11 @@ async def startup():
     await db.login_attempts.create_index("identifier")
     await db.sessions.create_index("jti", unique=True)
     await db.sessions.create_index("user_id")
+    try:
+        await run_in_threadpool(init_storage)
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error("Storage init failed: %s", e)
     admin_email = os.environ["ADMIN_EMAIL"].strip().lower()
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
@@ -404,6 +643,7 @@ async def startup():
                 "name": "Juan Alvarez",
                 "password_hash": hash_password(os.environ["ADMIN_PASSWORD"]),
                 "role": "commander",
+                "is_active": True,
                 "must_change_password": True,
                 "created_at": datetime.now(timezone.utc),
             }
