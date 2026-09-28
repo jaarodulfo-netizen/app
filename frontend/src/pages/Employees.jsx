@@ -4,7 +4,7 @@ import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlu
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
-import { api, fileUrl } from '../context/AuthContext';
+import { api, fileUrl, formatApiError } from '../context/AuthContext';
 
 function Avatar({ emp, size = 'h-14 w-14' }) {
     if (emp.photoPath) {
@@ -100,13 +100,13 @@ function EnrollModal({ open, onClose }) {
             reset();
             onClose();
         } catch (e) {
-            toast.error('ENROLL FAILED', { description: 'Could not save employee — try again' });
+            toast.error('ENROLL FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
         } finally {
             setSaving(false);
         }
     };
 
-    const valid = name.trim().length > 1 && cardNo && faceState === 'done';
+    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) && faceState === 'done';
 
     return (
         <AnimatePresence>
@@ -152,7 +152,7 @@ function EnrollModal({ open, onClose }) {
                                     </button>
                                     <div>
                                         <p className="mono text-[10px] tracking-widest text-slate-500">ID PHOTO · OPTIONAL</p>
-                                        <p className="text-xs text-slate-500 mt-1">JPG/PNG up to 5MB. Shown on the credential card.</p>
+                                        <p className="text-xs text-slate-500 mt-1">JPG/PNG up to 5MB. If provided, the gateway will also push the face to the assigned terminals.</p>
                                     </div>
                                     <input ref={fileRef} data-testid="enroll-photo-input" type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
                                 </div>
@@ -191,23 +191,18 @@ function EnrollModal({ open, onClose }) {
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="mono text-[10px] tracking-widest text-slate-500">CARD NUMBER</label>
+                                    <label className="mono text-[10px] tracking-widest text-slate-500">CARD NUMBER · 10 DIGITS</label>
                                     <div className="mt-2 flex gap-2">
                                         <input
                                             data-testid="enroll-card-input"
                                             value={cardNo}
-                                            onChange={(e) => setCardNo(e.target.value)}
-                                            placeholder="RFID-000000"
+                                            onChange={(e) => setCardNo(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                                            inputMode="numeric"
+                                            maxLength={10}
+                                            placeholder="0008512193"
                                             className="w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 mono text-sm text-sky-200 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60 transition-colors duration-200"
                                         />
-                                        <button
-                                            data-testid="enroll-generate-card-btn"
-                                            onClick={() => setCardNo(`RFID-${Math.floor(100000 + Math.random() * 900000)}`)}
-                                            className="shrink-0 rounded-lg border border-sky-500/40 px-3.5 text-sky-300 transition-colors duration-200 hover:bg-sky-500/10"
-                                            title="Generate card number"
-                                        >
-                                            <Sparkles size={15} />
-                                        </button>
+
                                     </div>
                                 </div>
                             </div>
