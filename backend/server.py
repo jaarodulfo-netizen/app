@@ -175,8 +175,9 @@ class DeviceIn(BaseModel):
 class DoorIn(BaseModel):
     name: str
     zone: str = "GENERAL"
-    x: float
-    y: float
+    x: Optional[float] = None
+    y: Optional[float] = None
+    floor: Optional[int] = None
     camId: Optional[str] = None
     deviceId: Optional[str] = None
     gatewayDeviceId: Optional[str] = None
@@ -188,10 +189,17 @@ class DoorUpdate(BaseModel):
     zone: Optional[str] = None
     x: Optional[float] = None
     y: Optional[float] = None
+    floor: Optional[int] = None
     camId: Optional[str] = None
     deviceId: Optional[str] = None
     gatewayDeviceId: Optional[str] = None
     doorNo: Optional[int] = None
+
+
+class DoorPlacement(BaseModel):
+    floor: Optional[int] = None
+    x: Optional[float] = None
+    y: Optional[float] = None
 
 
 class AttendanceConfigIn(BaseModel):
@@ -909,10 +917,12 @@ async def gateway_socket(websocket: WebSocket):
     expected = os.environ.get("GATEWAY_TOKEN", "")
     supplied = auth[7:] if auth.startswith("Bearer ") else ""
     if not expected or not supplied or not hmac.compare_digest(supplied.encode(), expected.encode()):
+        logger.warning("Gateway WebSocket authentication rejected")
         await websocket.close(code=1008)
         return
 
     await websocket.accept()
+    logger.info("Gateway WebSocket accepted")
     gateway_id = None
     try:
         while True:
@@ -922,6 +932,7 @@ async def gateway_socket(websocket: WebSocket):
             if msg_type == "register":
                 gateway_id = str(msg.get("gatewayId") or "kerma-monterrey")
                 gateway_connections[gateway_id] = websocket
+                logger.info("Gateway registered: %s with %s devices", gateway_id, len(msg.get("devices") or []))
                 for dev in msg.get("devices") or []:
                     await db.devices.update_one(
                         {"gatewayDeviceId": dev.get("id")},
@@ -1053,6 +1064,85 @@ async def serve_file(path: str, request: Request):
         raise HTTPException(status_code=404, detail="File not found")
     data, content_type = await get_object(path)
     return Response(content=data, media_type=record.get("content_type", content_type))
+
+
+# --- Building floor layouts ---
+
+@api_router.get("/layouts")
+async def list_layouts(user=Depends(get_current_user)):
+    docs = await db.floor_layouts.find({}).sort("floor", 1).to_list(10)
+    by_floor = {d["floor"]: d for d in docs}
+    return [
+        {
+            "floor": floor,
+            "path": by_floor.get(floor, {}).get("path"),
+            "content_type": by_floor.get(floor, {}).get("content_type"),
+            "filename": by_floor.get(floor, {}).get("filename"),
+        }
+        for floor in (1, 2, 3)
+    ]
+
+
+@api_router.post("/upload/layout/{floor}")
+async def upload_layout(floor: int, file: UploadFile = File(...), user=Depends(get_current_user)):
+    if floor not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="Floor must be 1, 2 or 3")
+    allowed = {"image/jpeg", "image/png", "image/webp", "application/pdf"}
+    if file.content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Layout must be JPG, PNG, WEBP or PDF")
+    data = await file.read()
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Layout must be under 15MB")
+    ext = (file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "bin")
+    path = f"{APP_NAME}/layouts/floor-{floor}/{uuid.uuid4()}.{ext}"
+    result = await put_object(path, data, file.content_type)
+    await db.files.insert_one({
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": file.content_type,
+        "size": result["size"],
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc),
+    })
+    await db.floor_layouts.update_one(
+        {"floor": floor},
+        {"$set": {
+            "floor": floor,
+            "path": result["path"],
+            "content_type": file.content_type,
+            "filename": file.filename,
+            "updated_at": datetime.now(timezone.utc),
+            "updated_by": user["email"],
+        }},
+        upsert=True,
+    )
+    return {"floor": floor, "path": result["path"], "content_type": file.content_type, "filename": file.filename}
+
+
+@api_router.put("/doors/{item_id}/placement")
+async def place_door(item_id: str, body: DoorPlacement, user=Depends(get_current_user)):
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid door id")
+    if body.floor is not None and body.floor not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="Floor must be 1, 2 or 3")
+    if body.floor is None:
+        updates = {"floor": None, "x": None, "y": None}
+    else:
+        if body.x is None or body.y is None:
+            raise HTTPException(status_code=400, detail="x and y are required when placing a door")
+        updates = {
+            "floor": body.floor,
+            "x": max(1.0, min(99.0, float(body.x))),
+            "y": max(1.0, min(99.0, float(body.y))),
+        }
+    updates["placement_updated_at"] = datetime.now(timezone.utc)
+    result = await db.doors.update_one({"_id": oid}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Door not found")
+    doc = await db.doors.find_one({"_id": oid})
+    return doc_id(doc)
 
 
 # --- Registry: employees / cameras / devices / doors ---
@@ -1738,8 +1828,9 @@ async def seed_kerma_doors():
             await db.doors.insert_one({
                 "name": name,
                 "zone": "GENERAL",
-                "x": 8 + ((seq - 1) % 8) * 11,
-                "y": 12 + ((seq - 1) // 8) * 14,
+                "x": None,
+                "y": None,
+                "floor": None,
                 "camId": None,
                 "deviceId": str(device["_id"]),
                 "gatewayDeviceId": gateway_device_id,
@@ -1750,6 +1841,20 @@ async def seed_kerma_doors():
                 "created_at": datetime.now(timezone.utc),
             })
             seq += 1
+
+
+async def migrate_hardware_doors_to_unplaced_once():
+    marker = await db.app_meta.find_one({"_id": "hardware_doors_unplaced_v1"})
+    if marker:
+        return
+    await db.doors.update_many(
+        {"hardwareLinked": True},
+        {"$set": {"floor": None, "x": None, "y": None}},
+    )
+    await db.app_meta.insert_one({
+        "_id": "hardware_doors_unplaced_v1",
+        "applied_at": datetime.now(timezone.utc),
+    })
 
 
 async def seed_kerma_devices():
@@ -1793,6 +1898,7 @@ async def startup():
     await db.kerma_file_index.create_index("path", unique=True)
     await seed_kerma_devices()
     await seed_kerma_doors()
+    await migrate_hardware_doors_to_unplaced_once()
     await seed_kerma_people()
     admin_email = os.environ["ADMIN_EMAIL"].strip().lower()
     existing = await db.users.find_one({"email": admin_email})
