@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import shutil
 import json
+import base64
 from datetime import datetime, timezone, timedelta, time
 from zoneinfo import ZoneInfo
 
@@ -1024,6 +1025,12 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
 
     person_id = str(r.inserted_id)
     credentials = [{"type": "card", "value": card_no}]
+    if body.photoPath:
+        try:
+            photo_bytes, _ = await get_object(body.photoPath)
+            credentials.append({"type": "face", "imageBase64": base64.b64encode(photo_bytes).decode("ascii")})
+        except Exception as e:
+            logger.warning("Could not attach enrollment face photo: %s", e)
     await send_gateway_command({
         "kind": "person.upsert",
         "person": {
