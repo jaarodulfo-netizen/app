@@ -1,10 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Search, Download, ScanFace, CreditCard, Radio } from 'lucide-react';
 import dayjs from 'dayjs';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
+import { api } from '../context/AuthContext';
 
 const METHOD_ICON = { FACE: ScanFace, CARD: CreditCard, REMOTE: Radio };
 
@@ -14,6 +15,22 @@ export default function Events() {
     const [door, setDoor] = useState('all');
     const [result, setResult] = useState('all');
     const [method, setMethod] = useState('all');
+    const [gatewayOnline, setGatewayOnline] = useState(false);
+
+    useEffect(() => {
+        let cancelled = false;
+        const check = async () => {
+            try {
+                const { data } = await api.get('/gateway/status');
+                if (!cancelled) setGatewayOnline(Boolean(data.online));
+            } catch {
+                if (!cancelled) setGatewayOnline(false);
+            }
+        };
+        check();
+        const t = setInterval(check, 5000);
+        return () => { cancelled = true; clearInterval(t); };
+    }, []);
 
     const filtered = useMemo(
         () =>
@@ -36,6 +53,14 @@ export default function Events() {
         <div className="space-y-6" data-testid="events-page">
             <PageHeader eyebrow="AUDIT TRAIL // EVERY ACCESS ATTEMPT" title="Real-time Events Log">
                 <div className="flex items-center gap-3">
+                    <span className={`flex items-center gap-2 rounded-full border px-4 py-2 mono text-[10px] tracking-widest ${
+                        gatewayOnline
+                            ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                            : 'border-orange-400/30 bg-orange-400/10 text-orange-300'
+                    }`}>
+                        <span className={`h-2 w-2 rounded-full ${gatewayOnline ? 'bg-emerald-400' : 'bg-orange-400'}`} />
+                        {gatewayOnline ? 'STUDIO GATEWAY CONNECTED' : 'STUDIO GATEWAY OFFLINE'}
+                    </span>
                     <button
                         data-testid="live-toggle"
                         onClick={() => setLive(!live)}
