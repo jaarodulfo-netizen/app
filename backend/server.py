@@ -1000,6 +1000,60 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
+# --- Kerma Monterrey device inventory seed ---
+KERMA_DEVICE_SEED = [
+    {"type": "gateway", "name": "Kerma Monterrey Gateway", "ip": "", "fw": "", "detail": "Gateway ID: kerma-monterrey", "signal": 100},
+    {"type": "face", "name": "VIP Entrance", "ip": "192.168.2.39", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "VIP Exit", "ip": "192.168.1.56", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Turnstile 1 Entrance", "ip": "192.168.3.159", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Turnstile 1 Exit", "ip": "192.168.0.206", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Turnstile 2 Entrance", "ip": "192.168.0.169", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Turnstile 2 Exit", "ip": "192.168.3.4", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Main Inventory", "ip": "192.168.2.226", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Cleaning Storage", "ip": "192.168.1.169", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Roof Stairs", "ip": "192.168.1.124", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Technicians Inventory", "ip": "192.168.3.208", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Attendance Main", "ip": "192.168.0.77", "fw": "", "detail": "Dedicated attendance facial terminal", "signal": 95},
+    {"type": "card", "name": "1st Floor AC", "ip": "192.168.3.111", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "2nd Floor AC", "ip": "192.168.3.112", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "Break Room", "ip": "192.168.3.113", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "3rd Floor AC", "ip": "192.168.3.114", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "Restrooms", "ip": "192.168.3.115", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "1st Floor 2nd AC", "ip": "192.168.3.116", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "nvr", "name": "NVR 1", "ip": "192.168.3.101", "fw": "", "detail": "DS-7732NI-M4/16P · HTTP 80 · RTSP 554", "signal": 95},
+    {"type": "nvr", "name": "NVR 2", "ip": "192.168.3.102", "fw": "", "detail": "DS-7732NXI-I4/16P · HTTP 80 · RTSP 554", "signal": 95},
+]
+
+
+async def seed_kerma_devices():
+    attendance_id = None
+    for item in KERMA_DEVICE_SEED:
+        existing = await db.devices.find_one({"name": item["name"]})
+        if existing:
+            await db.devices.update_one(
+                {"_id": existing["_id"]},
+                {"$set": {**item, "status": existing.get("status", "online")}},
+            )
+            device_id = existing["_id"]
+        else:
+            doc = {**item, "status": "online", "created_at": datetime.now(timezone.utc)}
+            result = await db.devices.insert_one(doc)
+            device_id = result.inserted_id
+        if item["name"] == "Attendance Main":
+            attendance_id = device_id
+
+    if attendance_id is not None:
+        await db.attendance_config.update_one(
+            {"_id": "primary"},
+            {"$setOnInsert": {
+                "device_id": str(attendance_id),
+                "updated_at": datetime.now(timezone.utc),
+                "updated_by": "system-seed",
+            }},
+            upsert=True,
+        )
+
+
 @app.on_event("startup")
 async def startup():
     await db.users.create_index("email", unique=True)
@@ -1010,6 +1064,7 @@ async def startup():
     await db.events.create_index("time")
     HLS_ROOT.mkdir(parents=True, exist_ok=True)
     await db.kerma_file_index.create_index("path", unique=True)
+    await seed_kerma_devices()
     admin_email = os.environ["ADMIN_EMAIL"].strip().lower()
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
