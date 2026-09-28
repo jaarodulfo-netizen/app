@@ -71,30 +71,33 @@ export function SecurityProvider({ children }) {
         }
     }, []);
 
-    const openDoor = useCallback(
-        (doorId) => {
-            const door = doorsRef.current.find((d) => d.id === doorId);
-            if (!door || door.status === 'opening' || door.status === 'unlocked') return;
-            setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: 'opening' } : d)));
-            setTimeout(() => {
-                setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: 'unlocked' } : d)));
-                logEvent({
-                    person: `${user?.name || 'OPS CONSOLE'} · REMOTE`,
-                    door: door.name,
-                    doorCode: door.code,
-                    zone: door.zone || '',
-                    method: 'REMOTE',
-                    result: 'granted',
-                    detail: 'REMOTE OPEN COMMAND',
-                });
-                toast.success(`DOOR RELEASED · ${door.code}`, { description: `${door.name} unlocked remotely — auto relock in 10s` });
-            }, 1600);
-            setTimeout(() => {
-                setDoors((prev) => prev.map((d) => (d.id === doorId && d.status === 'unlocked' ? { ...d, status: 'locked' } : d)));
-            }, 11600);
-        },
-        [logEvent, user],
-    );
+    const openDoor = useCallback(async (doorId) => {
+        const door = doorsRef.current.find((d) => d.id === doorId);
+        if (!door || door.status === 'opening') return;
+        setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: 'opening' } : d)));
+        try {
+            const { data } = await api.post(`/doors/${doorId}/command`, { cmd: 'open' });
+            setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: data.status || 'unlocked' } : d)));
+            toast.success(`PHYSICAL DOOR OPENED · ${door.code}`, { description: `${door.name} command executed by Kerma studio gateway` });
+        } catch (e) {
+            setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: 'locked' } : d)));
+            toast.error('DOOR COMMAND FAILED', { description: e?.response?.data?.detail || 'Studio gateway is offline or the door is not linked' });
+            throw e;
+        }
+    }, []);
+
+    const closeDoor = useCallback(async (doorId) => {
+        const door = doorsRef.current.find((d) => d.id === doorId);
+        if (!door) return;
+        try {
+            const { data } = await api.post(`/doors/${doorId}/command`, { cmd: 'close' });
+            setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: data.status || 'locked' } : d)));
+            toast.success(`PHYSICAL DOOR CLOSED · ${door.code}`, { description: `${door.name} command executed by Kerma studio gateway` });
+        } catch (e) {
+            toast.error('DOOR COMMAND FAILED', { description: e?.response?.data?.detail || 'Studio gateway is offline or the door is not linked' });
+            throw e;
+        }
+    }, []);
 
     const silenceDoor = useCallback(
         (doorId) => {
@@ -178,6 +181,7 @@ export function SecurityProvider({ children }) {
                 live,
                 setLive,
                 openDoor,
+                closeDoor,
                 silenceDoor,
                 addEmployee,
                 deleteEmployee,
