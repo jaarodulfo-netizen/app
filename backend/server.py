@@ -879,7 +879,14 @@ async def gateway_event_doc(event: dict) -> dict:
         else:
             outcome = "status"
     result = outcome
-    detail = event.get("description") or {
+    raw_detail = str(event.get("description") or "").strip()
+    normalized_status_detail = {
+        "exit button pressed": "BUTTON PRESSED",
+        "exit button released": "BUTTON RELEASED",
+        "lock released": "LOCK RELEASED",
+        "lock closed": "LOCK CLOSED",
+    }
+    detail = normalized_status_detail.get(raw_detail.lower()) or raw_detail or {
         "granted": "ACCESS GRANTED",
         "denied": "ACCESS DENIED",
         "alarm": "ALARM",
@@ -1859,25 +1866,26 @@ async def seed_kerma_doors():
 
 
 async def migrate_door_status_events_once():
-    marker = await db.app_meta.find_one({"_id": "door_status_events_v1"})
+    marker = await db.app_meta.find_one({"_id": "door_status_events_v2"})
     if marker:
         return
-    status_patterns = [
-        "lock released",
-        "lock closed",
-        "exit button pressed",
-        "exit button released",
-        "door opened normally",
-        "door closed normally",
-        "always-open state started",
-        "always-open state ended",
-    ]
-    await db.events.update_many(
-        {"detail": {"$in": status_patterns}},
-        {"$set": {"result": "status", "method": "OTHER"}},
-    )
+    status_labels = {
+        "lock released": "LOCK RELEASED",
+        "lock closed": "LOCK CLOSED",
+        "exit button pressed": "BUTTON PRESSED",
+        "exit button released": "BUTTON RELEASED",
+        "door opened normally": "DOOR OPENED",
+        "door closed normally": "DOOR CLOSED",
+        "always-open state started": "ALWAYS OPEN STARTED",
+        "always-open state ended": "ALWAYS OPEN ENDED",
+    }
+    for old_label, new_label in status_labels.items():
+        await db.events.update_many(
+            {"detail": {"$regex": f"^{re.escape(old_label)}$", "$options": "i"}},
+            {"$set": {"result": "status", "method": "OTHER", "detail": new_label}},
+        )
     await db.app_meta.insert_one({
-        "_id": "door_status_events_v1",
+        "_id": "door_status_events_v2",
         "applied_at": datetime.now(timezone.utc),
     })
 
