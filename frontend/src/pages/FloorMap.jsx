@@ -26,7 +26,7 @@ export default function FloorMap() {
     const [uploading, setUploading] = useState(false);
     const uploadRef = useRef(null);
 
-    const doorList = doors || [];
+    const doorList = useMemo(() => doors || [], [doors]);
     const placedOnFloor = useMemo(
         () => doorList.filter((d) => Number(d.floor) === floor && d.x != null && d.y != null),
         [doorList, floor],
