@@ -125,6 +125,12 @@ export function SecurityProvider({ children }) {
         return data;
     }, []);
 
+    const updateEmployee = useCallback(async (id, updates) => {
+        const { data } = await api.put(`/employees/${id}`, updates);
+        setEmployees((prev) => (prev || []).map((e) => (e.id === id ? data : e)));
+        return data;
+    }, []);
+
     const deleteEmployee = useCallback(async (id) => {
         await api.delete(`/employees/${id}`);
         setEmployees((prev) => (prev || []).filter((e) => e.id !== id));
@@ -184,6 +190,7 @@ export function SecurityProvider({ children }) {
                 closeDoor,
                 silenceDoor,
                 addEmployee,
+                updateEmployee,
                 deleteEmployee,
                 addCamera,
                 deleteCamera,
