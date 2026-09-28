@@ -122,6 +122,8 @@ class EmployeeIn(BaseModel):
     name: str
     role: str = ""
     cardNo: str = ""
+    cardNos: Optional[List[str]] = None
+    personId: Optional[str] = None
     faceSync: bool = False
     faceMatch: Optional[str] = None
     level: str = "L1 · GENERAL"
@@ -1211,6 +1213,380 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
+KERMA_PERSON_SEED = [
+    {
+        "name": "David Gutierrez",
+        "personId": "00000001",
+        "cardNos": [
+            "0008512187"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Juan Alvarez",
+        "personId": "00000002",
+        "cardNos": [
+            "0008512197",
+            "0008512175",
+            "0008512223",
+            "0008512259"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Francisco Vilchez",
+        "personId": "00000004",
+        "cardNos": [
+            "0008512170",
+            "0008512185"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Hector Vargas",
+        "personId": "00000005",
+        "cardNos": [
+            "0008512188"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Roberto Infante",
+        "personId": "00000007",
+        "cardNos": [
+            "0008512203"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Sergio Zurita",
+        "personId": "00000008",
+        "cardNos": [
+            "0008512173"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Andrea Regalado",
+        "personId": "00000009",
+        "cardNos": [
+            "0008512191"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Carson Hubbard",
+        "personId": "00000011",
+        "cardNos": [
+            "0008512234"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Diego Salas",
+        "personId": "00000013",
+        "cardNos": [
+            "0008512213"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Edwin Arceo",
+        "personId": "00000014",
+        "cardNos": [
+            "0008512190"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Edgar Bazabilbazo",
+        "personId": "00000015",
+        "cardNos": [
+            "0008512198"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Claudia Chichizola",
+        "personId": "00000016",
+        "cardNos": [
+            "0008512192"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Valeria Gray",
+        "personId": "00000017",
+        "cardNos": [
+            "0008512169"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Vanessa Rios",
+        "personId": "00000018",
+        "cardNos": [
+            "0008512167"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Technicians",
+        "personId": "00000019",
+        "cardNos": [
+            "0008512206"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Carolina Shepard",
+        "personId": "00000020",
+        "cardNos": [
+            "0008512205"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Barbara Villareal",
+        "personId": "00000021",
+        "cardNos": [
+            "0008512164"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Regina Castillo",
+        "personId": "00000024",
+        "cardNos": [
+            "0008512186"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Elias Hernandez",
+        "personId": "00000025",
+        "cardNos": [
+            "0008512195"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Angela Zambrano",
+        "personId": "00000027",
+        "cardNos": [
+            "0008512193"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "WANNA CLEANING",
+        "personId": "00000030",
+        "cardNos": [
+            "0008512208"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "supervisor access",
+        "personId": "00000031",
+        "cardNos": [
+            "0008512162"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Eduardo Lopez",
+        "personId": "00000032",
+        "cardNos": [
+            "0008512201"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Alfredo Cardenas",
+        "personId": "00000033",
+        "cardNos": [
+            "0008512202"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Alfredo Infante",
+        "personId": "00000034",
+        "cardNos": [
+            "0008512204"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Patricio Garza",
+        "personId": "00000035",
+        "cardNos": [
+            "0008512207"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Security",
+        "personId": "00000036",
+        "cardNos": [
+            "0008512209"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Jorge Sanchez",
+        "personId": "00000037",
+        "cardNos": [
+            "0008512210"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Norma Luna",
+        "personId": "00000038",
+        "cardNos": [
+            "0008512196"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Alia Contreras",
+        "personId": "00000039",
+        "cardNos": [],
+        "faceSync": true
+    },
+    {
+        "name": "Liam Tasiello",
+        "personId": "00000040",
+        "cardNos": [
+            "0008512212"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Karina Tamez",
+        "personId": "00000041",
+        "cardNos": [
+            "0008512214"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Fernando Enriquez",
+        "personId": "00000042",
+        "cardNos": [
+            "0008512215"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "ATHZIRI GUTIERREZ",
+        "personId": "00000044",
+        "cardNos": [
+            "0008512217"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Samuel Grajeda",
+        "personId": "00000045",
+        "cardNos": [
+            "0008512225"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Francisco Bernal",
+        "personId": "00000046",
+        "cardNos": [
+            "0008512219"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Debhani Gonzalez",
+        "personId": "00000047",
+        "cardNos": [
+            "0008512189"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Zara Landa",
+        "personId": "00000048",
+        "cardNos": [
+            "0008512220"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Yahir Gracia",
+        "personId": "00000049",
+        "cardNos": [
+            "0008512221"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Paulina Arreola",
+        "personId": "00000050",
+        "cardNos": [
+            "0008512222"
+        ],
+        "faceSync": false
+    },
+    {
+        "name": "Gerardo Cerda",
+        "personId": "00000051",
+        "cardNos": [
+            "0008512227"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "David Orta",
+        "personId": "00000052",
+        "cardNos": [
+            "0008512226"
+        ],
+        "faceSync": true
+    },
+    {
+        "name": "Jesus Martinez",
+        "personId": "00000053",
+        "cardNos": [
+            "0008512224"
+        ],
+        "faceSync": true
+    }
+]
+
+
+async def seed_kerma_people():
+    for item in KERMA_PERSON_SEED:
+        primary = item["cardNos"][0] if item["cardNos"] else ""
+        doc = {
+            "name": item["name"],
+            "personId": item["personId"],
+            "cardNo": primary,
+            "cardNos": item["cardNos"],
+            "role": "Staff Member",
+            "level": "L1 · GENERAL",
+            "faceSync": item["faceSync"],
+            "faceMatch": None,
+            "photoPath": None,
+            "source": "iVMS-4200",
+            "created_by": "system-import",
+        }
+        existing = await db.employees.find_one({"personId": item["personId"]})
+        if existing:
+            await db.employees.update_one({"_id": existing["_id"]}, {"$set": doc})
+        else:
+            doc["created_at"] = datetime.now(timezone.utc)
+            await db.employees.insert_one(doc)
+
+
 # --- Kerma Monterrey device inventory seed ---
 KERMA_DEVICE_SEED = [
     {"type": "gateway", "name": "Kerma Monterrey Gateway", "gatewayDeviceId": "kerma-monterrey", "doors": [], "ip": "", "fw": "", "detail": "Gateway ID: kerma-monterrey", "signal": 100},
@@ -1276,6 +1652,7 @@ async def startup():
     HLS_ROOT.mkdir(parents=True, exist_ok=True)
     await db.kerma_file_index.create_index("path", unique=True)
     await seed_kerma_devices()
+    await seed_kerma_people()
     admin_email = os.environ["ADMIN_EMAIL"].strip().lower()
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
