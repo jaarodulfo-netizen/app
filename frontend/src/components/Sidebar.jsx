@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { LayoutDashboard, Map, Video, Users, Cpu, Activity, Radio, ShieldCheck, Clock3 } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import { api, useAuth } from '../context/AuthContext';
 
 const NAV = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true, testid: 'nav-dashboard' },
@@ -15,7 +16,23 @@ const NAV = [
 
 export function Sidebar() {
     const { user } = useAuth();
+    const [gatewayOnline, setGatewayOnline] = useState(false);
     const items = NAV.filter((n) => !n.commanderOnly || user?.role === 'commander');
+
+    useEffect(() => {
+        let mounted = true;
+        const check = async () => {
+            try {
+                const { data } = await api.get('/gateway/status');
+                if (mounted) setGatewayOnline(Boolean(data.online));
+            } catch {
+                if (mounted) setGatewayOnline(false);
+            }
+        };
+        check();
+        const t = setInterval(check, 5000);
+        return () => { mounted = false; clearInterval(t); };
+    }, []);
 
     return (
         <aside
@@ -29,12 +46,18 @@ export function Sidebar() {
                 <div className="h-px w-full bg-gradient-to-r from-[#ea7f2b]/60 via-[#fee396]/30 to-transparent" />
             </div>
 
-            <div className="mx-6 mb-6 flex items-center gap-2.5 rounded-lg border border-emerald-400/20 bg-emerald-400/5 px-3 py-2.5">
+            <div className={`mx-6 mb-6 flex items-center gap-2.5 rounded-lg border px-3 py-2.5 ${
+                gatewayOnline
+                    ? 'border-emerald-400/20 bg-emerald-400/5'
+                    : 'border-orange-400/20 bg-orange-400/5'
+            }`}>
                 <span className="relative flex h-2 w-2">
-                    <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 node-ping" />
-                    <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+                    {gatewayOnline && <span className="absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 node-ping" />}
+                    <span className={`relative inline-flex h-2 w-2 rounded-full ${gatewayOnline ? 'bg-emerald-400' : 'bg-orange-400'}`} />
                 </span>
-                <span className="mono text-[10px] tracking-widest text-emerald-300">GATEWAY-01 · ONLINE</span>
+                <span className={`mono text-[10px] tracking-widest ${gatewayOnline ? 'text-emerald-300' : 'text-orange-300'}`}>
+                    STUDIO GATEWAY · {gatewayOnline ? 'ONLINE' : 'OFFLINE'}
+                </span>
             </div>
 
             <nav className="flex-1 px-4 space-y-1.5">
