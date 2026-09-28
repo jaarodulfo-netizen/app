@@ -934,6 +934,14 @@ async def gateway_socket(websocket: WebSocket):
                             "gatewayLastSeen": datetime.now(timezone.utc),
                         }},
                     )
+                    await db.doors.update_many(
+                        {"gatewayDeviceId": dev.get("id")},
+                        {"$set": {
+                            "gatewayOnline": bool(dev.get("online")),
+                            "hardwareStatus": "online" if dev.get("online") else "offline",
+                            "gatewayLastSeen": datetime.now(timezone.utc),
+                        }},
+                    )
                 await websocket.send_json({"type": "registered", "gatewayId": gateway_id, "hubTime": int(datetime.now().timestamp() * 1000)})
                 continue
 
@@ -955,6 +963,15 @@ async def gateway_socket(websocket: WebSocket):
                     {"$set": {
                         "gatewayOnline": online,
                         "status": "online" if online else "offline",
+                        "gatewayReason": msg.get("reason"),
+                        "gatewayLastSeen": datetime.now(timezone.utc),
+                    }},
+                )
+                await db.doors.update_many(
+                    {"gatewayDeviceId": dev_id},
+                    {"$set": {
+                        "gatewayOnline": online,
+                        "hardwareStatus": "online" if online else "offline",
                         "gatewayReason": msg.get("reason"),
                         "gatewayLastSeen": datetime.now(timezone.utc),
                     }},
@@ -983,6 +1000,12 @@ async def gateway_socket(websocket: WebSocket):
                 {"gatewayId": gateway_id},
                 {"$set": {"gatewayOnline": False, "status": "offline", "gatewayLastSeen": datetime.now(timezone.utc)}},
             )
+            gateway_device_ids = [d.get("gatewayDeviceId") async for d in db.devices.find({"gatewayId": gateway_id}, {"gatewayDeviceId": 1}) if d.get("gatewayDeviceId")]
+            if gateway_device_ids:
+                await db.doors.update_many(
+                    {"gatewayDeviceId": {"$in": gateway_device_ids}},
+                    {"$set": {"gatewayOnline": False, "hardwareStatus": "offline", "gatewayLastSeen": datetime.now(timezone.utc)}},
+                )
 
 
 # --- File upload (employee photos) ---
@@ -1684,6 +1707,51 @@ KERMA_DEVICE_SEED = [
 ]
 
 
+async def seed_kerma_doors():
+    devices = await db.devices.find({"type": {"$in": ["face", "card"]}}).to_list(100)
+    seq = 1
+    for device in devices:
+        gateway_device_id = device.get("gatewayDeviceId")
+        door_numbers = device.get("doors") or []
+        if not gateway_device_id or not door_numbers:
+            continue
+
+        for door_no in door_numbers:
+            existing = await db.doors.find_one({
+                "gatewayDeviceId": gateway_device_id,
+                "doorNo": int(door_no),
+            })
+            if existing:
+                await db.doors.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {
+                        "deviceId": str(device["_id"]),
+                        "gatewayDeviceId": gateway_device_id,
+                        "doorNo": int(door_no),
+                        "hardwareLinked": True,
+                    }},
+                )
+                continue
+
+            # Keep auto-seeded doors compact; exact door names/positions can be edited later.
+            name = device.get("name") if len(door_numbers) == 1 else f"{device.get('name')} · Door {door_no}"
+            await db.doors.insert_one({
+                "name": name,
+                "zone": "GENERAL",
+                "x": 8 + ((seq - 1) % 8) * 11,
+                "y": 12 + ((seq - 1) // 8) * 14,
+                "camId": None,
+                "deviceId": str(device["_id"]),
+                "gatewayDeviceId": gateway_device_id,
+                "doorNo": int(door_no),
+                "hardwareLinked": True,
+                "code": f"D-{seq:02d}",
+                "status": "locked",
+                "created_at": datetime.now(timezone.utc),
+            })
+            seq += 1
+
+
 async def seed_kerma_devices():
     attendance_id = None
     for item in KERMA_DEVICE_SEED:
@@ -1724,6 +1792,7 @@ async def startup():
     HLS_ROOT.mkdir(parents=True, exist_ok=True)
     await db.kerma_file_index.create_index("path", unique=True)
     await seed_kerma_devices()
+    await seed_kerma_doors()
     await seed_kerma_people()
     admin_email = os.environ["ADMIN_EMAIL"].strip().lower()
     existing = await db.users.find_one({"email": admin_email})
