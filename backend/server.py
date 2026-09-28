@@ -140,6 +140,18 @@ class EmployeeIn(BaseModel):
     doorRights: Optional[dict] = None
 
 
+class EmployeeUpdate(BaseModel):
+    name: Optional[str] = None
+    role: Optional[str] = None
+    cardNo: Optional[str] = None
+    cardNos: Optional[List[str]] = None
+    personId: Optional[str] = None
+    faceSync: Optional[bool] = None
+    faceMatch: Optional[str] = None
+    level: Optional[str] = None
+    photoPath: Optional[str] = None
+
+
 class CameraIn(BaseModel):
     label: str
     location: str = ""
@@ -1060,6 +1072,48 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     })
     await db.employees.update_one({"_id": r.inserted_id}, {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": datetime.now(timezone.utc)}})
     doc["hardwareSync"] = "synced"
+    return doc_id(doc)
+
+
+@api_router.put("/employees/{item_id}")
+async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_current_user)):
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid employee id")
+    existing = await db.employees.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+
+    cards = updates.get("cardNos")
+    if cards is not None:
+        normalized = []
+        for card in cards:
+            card = str(card).strip()
+            if card:
+                if not card.isdigit() or len(card) != 10:
+                    raise HTTPException(status_code=400, detail="Every card number must be exactly 10 digits")
+                normalized.append(card)
+        updates["cardNos"] = normalized
+        updates["cardNo"] = normalized[0] if normalized else ""
+    elif "cardNo" in updates:
+        card = str(updates["cardNo"]).strip()
+        if card and (not card.isdigit() or len(card) != 10):
+            raise HTTPException(status_code=400, detail="Card number must be exactly 10 digits")
+        updates["cardNo"] = card
+        updates["cardNos"] = [card] if card else []
+
+    if updates.get("name") is not None:
+        updates["name"] = updates["name"].strip()
+        if not updates["name"]:
+            raise HTTPException(status_code=400, detail="Name is required")
+
+    updates["updated_at"] = datetime.now(timezone.utc)
+    updates["updated_by"] = user["email"]
+    await db.employees.update_one({"_id": oid}, {"$set": updates})
+    doc = await db.employees.find_one({"_id": oid})
     return doc_id(doc)
 
 
