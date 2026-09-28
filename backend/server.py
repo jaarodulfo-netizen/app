@@ -568,6 +568,9 @@ def event_out(d: dict) -> dict:
         "method": d.get("method", "CARD"),
         "result": d.get("result", "granted"),
         "detail": d.get("detail", ""),
+        "cardNo": d.get("cardNo"),
+        "source_device": d.get("source_device"),
+        "source_device_id": d.get("source_device_id"),
     }
 
 
