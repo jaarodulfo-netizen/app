@@ -151,9 +151,16 @@ export default function Events() {
                                         <p className="text-sm font-semibold text-slate-200 truncate">{e.person}</p>
                                         <p className="mono text-[9px] text-slate-600 tracking-wider mt-0.5 sm:hidden">{e.doorCode}</p>
                                     </div>
-                                    <p className="mono text-[11px] text-slate-400 tracking-wider truncate hidden sm:block">
-                                        {e.doorCode} · {e.door?.toUpperCase()} — {e.zone}
-                                    </p>
+                                    <div className="hidden sm:block min-w-0">
+                                        <p className="mono text-[11px] text-slate-400 tracking-wider truncate">
+                                            {e.doorCode} · {e.door?.toUpperCase()} — {e.zone}
+                                        </p>
+                                        {(e.cardNo || e.source_device) && (
+                                            <p className="mono text-[9px] text-slate-600 tracking-wider mt-0.5 truncate">
+                                                {e.cardNo ? `CARD ${e.cardNo}` : ''}{e.cardNo && e.source_device ? ' · ' : ''}{e.source_device || ''}
+                                            </p>
+                                        )}
+                                    </div>
                                     <span className="hidden sm:flex items-center gap-1.5 mono text-[10px] tracking-widest text-slate-500">
                                         <Icon size={12} className="text-[#fee396]" />
                                         {e.method}
