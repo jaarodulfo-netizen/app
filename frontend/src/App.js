@@ -17,6 +17,7 @@ import Employees from '@/pages/Employees';
 import Devices from '@/pages/Devices';
 import Events from '@/pages/Events';
 import Officers from '@/pages/Officers';
+import Attendance from '@/pages/Attendance';
 
 function BootScreen() {
     return (
@@ -61,6 +62,7 @@ function Console() {
                             <Route path="/employees" element={<Employees />} />
                             <Route path="/devices" element={<Devices />} />
                             <Route path="/events" element={<Events />} />
+                            <Route path="/attendance" element={<Attendance />} />
                             <Route path="/officers" element={<Officers />} />
                         </Routes>
                     </main>
