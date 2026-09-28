@@ -49,7 +49,7 @@ export default function FloorMap() {
         if (!selected) return;
         setEditName(selected.name || '');
         setEditZone(selected.zone || '');
-    }, [selectedId, selected?.name, selected?.zone]);
+    }, [selected]);
 
     const uploadLayout = async (e) => {
         const file = e.target.files?.[0];
