@@ -13,8 +13,8 @@ const sourceLabel = (e) => {
     const detail = String(e?.detail || '').toUpperCase();
     if (detail.includes('BUTTON')) return 'BUTTON';
     if (detail.includes('LOCK')) return 'MAGNET';
-    if (e?.method === 'CARD' || e?.cardNo) return 'CARD';
-    return 'CARD';
+    if (e?.method === 'CARD' || e?.cardNo) return e?.person || 'CARD';
+    return e?.person || 'CARD';
 };
 
 export default function Events() {
