@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { LockOpen, BellOff, Loader2, ShieldAlert, Pencil, Plus, X, Trash2, Save } from 'lucide-react';
+import { LockOpen, Lock, BellOff, Loader2, ShieldAlert, Pencil, Plus, X, Trash2, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { FloorPlan } from '../components/FloorPlan';
@@ -14,18 +14,30 @@ const STATUS_META = {
 };
 
 function AddDoorModal({ pos, onClose }) {
-    const { addDoor } = useSecurity();
+    const { addDoor, devices } = useSecurity();
     const [name, setName] = useState('');
     const [zone, setZone] = useState('');
+    const [deviceId, setDeviceId] = useState('');
+    const [doorNo, setDoorNo] = useState('1');
     const [saving, setSaving] = useState(false);
+    const physicalDevices = (devices || []).filter((d) => (d.type === 'card' || d.type === 'face') && d.gatewayDeviceId);
+    const selectedDevice = physicalDevices.find((d) => d.id === deviceId);
 
     const submit = async (e) => {
         e.preventDefault();
         setSaving(true);
         try {
-            const door = await addDoor({ name: name.trim(), zone: zone.trim().toUpperCase() || 'GENERAL', x: pos.x, y: pos.y });
-            toast.success('DOOR PLACED', { description: `${door.code} · ${door.name}` });
-            setName(''); setZone('');
+            const door = await addDoor({
+                name: name.trim(),
+                zone: zone.trim().toUpperCase() || 'GENERAL',
+                x: pos.x,
+                y: pos.y,
+                deviceId: selectedDevice?.id || null,
+                gatewayDeviceId: selectedDevice?.gatewayDeviceId || null,
+                doorNo: selectedDevice ? Number(doorNo) : null,
+            });
+            toast.success('DOOR PLACED', { description: selectedDevice ? `${door.code} · linked to ${selectedDevice.name} / Door ${doorNo}` : `${door.code} · ${door.name}` });
+            setName(''); setZone(''); setDeviceId(''); setDoorNo('1');
             onClose(door);
         } catch (err) {
             toast.error('COULD NOT PLACE DOOR', { description: 'Try again' });
@@ -65,6 +77,23 @@ function AddDoorModal({ pos, onClose }) {
                         <input data-testid="door-zone-input" value={zone} onChange={(e) => setZone(e.target.value)} placeholder="e.g. LOBBY"
                             className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60 transition-colors duration-200" />
                     </div>
+                    <div>
+                        <label className="mono text-[10px] tracking-widest text-slate-500">PHYSICAL CONTROLLER / FACIAL</label>
+                        <select value={deviceId} onChange={(e) => { setDeviceId(e.target.value); setDoorNo('1'); }}
+                            className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60">
+                            <option value="">Visual door only · no hardware command</option>
+                            {physicalDevices.map((d) => <option key={d.id} value={d.id}>{d.name} · {d.ip || d.gatewayDeviceId}</option>)}
+                        </select>
+                    </div>
+                    {selectedDevice && (
+                        <div>
+                            <label className="mono text-[10px] tracking-widest text-slate-500">PHYSICAL DOOR NUMBER</label>
+                            <select value={doorNo} onChange={(e) => setDoorNo(e.target.value)}
+                                className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60">
+                                {(selectedDevice.doors?.length ? selectedDevice.doors : [1]).map((n) => <option key={n} value={n}>Door {n}</option>)}
+                            </select>
+                        </div>
+                    )}
                     <button data-testid="add-door-submit-btn" type="submit" disabled={saving}
                         className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
                             saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-gradient-to-r from-[#fee396] to-[#ea7f2b] text-[#2b1608] hover:opacity-90'
@@ -79,7 +108,7 @@ function AddDoorModal({ pos, onClose }) {
 }
 
 export default function FloorMap() {
-    const { doors, openDoor, silenceDoor, cameras, updateDoor, deleteDoor } = useSecurity();
+    const { doors, openDoor, closeDoor, silenceDoor, cameras, updateDoor, deleteDoor } = useSecurity();
     const doorList = doors || [];
     const [selectedId, setSelectedId] = useState(null);
     const [editMode, setEditMode] = useState(false);
@@ -267,30 +296,33 @@ export default function FloorMap() {
                                             SILENCE ALARM
                                         </button>
                                     ) : (
-                                        <button
-                                            data-testid="door-open-btn"
-                                            onClick={() => openDoor(selected.id)}
-                                            disabled={selected.status !== 'locked'}
-                                            className={`mt-6 flex w-full items-center justify-center gap-2 rounded-full py-3.5 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
-                                                selected.status === 'locked'
-                                                    ? 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
-                                                    : 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                                            }`}
-                                        >
-                                            {selected.status === 'opening' ? (
-                                                <>
-                                                    <Loader2 size={16} className="animate-spin" /> RELEASING LATCH…
-                                                </>
-                                            ) : selected.status === 'unlocked' ? (
-                                                <>
-                                                    <LockOpen size={16} /> OPEN · AUTO RELOCK IN 10S
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <LockOpen size={16} /> REMOTE OPEN
-                                                </>
-                                            )}
-                                        </button>
+                                        <div className="mt-6 grid grid-cols-2 gap-3">
+                                            <button
+                                                data-testid="door-open-btn"
+                                                onClick={() => openDoor(selected.id)}
+                                                disabled={selected.status === 'opening' || !selected.gatewayDeviceId}
+                                                className={`flex w-full items-center justify-center gap-2 rounded-full py-3.5 font-head font-bold tracking-widest text-xs transition-colors duration-200 ${
+                                                    selected.gatewayDeviceId && selected.status !== 'opening'
+                                                        ? 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
+                                                        : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                                }`}
+                                            >
+                                                {selected.status === 'opening' ? <><Loader2 size={16} className="animate-spin" /> OPENING…</> : <><LockOpen size={16} /> OPEN DOOR</>}
+                                            </button>
+                                            <button
+                                                data-testid="door-close-btn"
+                                                onClick={() => closeDoor(selected.id)}
+                                                disabled={!selected.gatewayDeviceId}
+                                                className={`flex w-full items-center justify-center gap-2 rounded-full py-3.5 font-head font-bold tracking-widest text-xs transition-colors duration-200 ${
+                                                    selected.gatewayDeviceId
+                                                        ? 'border border-emerald-400/30 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20'
+                                                        : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                                }`}
+                                            >
+                                                <Lock size={16} /> CLOSE DOOR
+                                            </button>
+                                            {!selected.gatewayDeviceId && <p className="col-span-2 mono text-[9px] tracking-wider text-orange-300">LINK THIS MAP DOOR TO A PHYSICAL CONTROLLER TO TEST OPEN/CLOSE</p>}
+                                        </div>
                                     )}
                                 </>
                             )}
