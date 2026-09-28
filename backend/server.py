@@ -1235,7 +1235,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512187"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Juan Alvarez",
@@ -1246,7 +1246,7 @@ KERMA_PERSON_SEED = [
             "0008512223",
             "0008512259"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Francisco Vilchez",
@@ -1255,7 +1255,7 @@ KERMA_PERSON_SEED = [
             "0008512170",
             "0008512185"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Hector Vargas",
@@ -1263,7 +1263,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512188"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Roberto Infante",
@@ -1271,7 +1271,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512203"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Sergio Zurita",
@@ -1279,7 +1279,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512173"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Andrea Regalado",
@@ -1287,7 +1287,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512191"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Carson Hubbard",
@@ -1295,7 +1295,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512234"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Diego Salas",
@@ -1303,7 +1303,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512213"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Edwin Arceo",
@@ -1311,7 +1311,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512190"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Edgar Bazabilbazo",
@@ -1319,7 +1319,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512198"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Claudia Chichizola",
@@ -1327,7 +1327,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512192"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Valeria Gray",
@@ -1335,7 +1335,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512169"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Vanessa Rios",
@@ -1343,7 +1343,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512167"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Technicians",
@@ -1351,7 +1351,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512206"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Carolina Shepard",
@@ -1359,7 +1359,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512205"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Barbara Villareal",
@@ -1367,7 +1367,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512164"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Regina Castillo",
@@ -1375,7 +1375,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512186"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Elias Hernandez",
@@ -1383,7 +1383,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512195"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Angela Zambrano",
@@ -1391,7 +1391,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512193"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "WANNA CLEANING",
@@ -1399,7 +1399,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512208"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "supervisor access",
@@ -1407,7 +1407,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512162"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Eduardo Lopez",
@@ -1415,7 +1415,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512201"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Alfredo Cardenas",
@@ -1423,7 +1423,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512202"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Alfredo Infante",
@@ -1431,7 +1431,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512204"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Patricio Garza",
@@ -1439,7 +1439,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512207"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Security",
@@ -1447,7 +1447,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512209"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Jorge Sanchez",
@@ -1455,7 +1455,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512210"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Norma Luna",
@@ -1463,13 +1463,13 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512196"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Alia Contreras",
         "personId": "00000039",
         "cardNos": [],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Liam Tasiello",
@@ -1477,7 +1477,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512212"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Karina Tamez",
@@ -1485,7 +1485,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512214"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Fernando Enriquez",
@@ -1493,7 +1493,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512215"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "ATHZIRI GUTIERREZ",
@@ -1501,7 +1501,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512217"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Samuel Grajeda",
@@ -1509,7 +1509,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512225"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Francisco Bernal",
@@ -1517,7 +1517,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512219"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Debhani Gonzalez",
@@ -1525,7 +1525,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512189"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Zara Landa",
@@ -1533,7 +1533,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512220"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Yahir Gracia",
@@ -1541,7 +1541,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512221"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Paulina Arreola",
@@ -1549,7 +1549,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512222"
         ],
-        "faceSync": false
+        "faceSync": False
     },
     {
         "name": "Gerardo Cerda",
@@ -1557,7 +1557,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512227"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "David Orta",
@@ -1565,7 +1565,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512226"
         ],
-        "faceSync": true
+        "faceSync": True
     },
     {
         "name": "Jesus Martinez",
@@ -1573,7 +1573,7 @@ KERMA_PERSON_SEED = [
         "cardNos": [
             "0008512224"
         ],
-        "faceSync": true
+        "faceSync": True
     }
 ]
 
