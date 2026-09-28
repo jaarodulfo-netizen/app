@@ -48,6 +48,12 @@ AegisNet Security Command OS — a dark, SOC-grade SaaS interface for building a
 - Officers nav hidden from non-commanders; officers API rejects non-commanders with 403
 - Verified: curl chain (domain reject, login, me, rotate, create officer, domain-reject on create) + Playwright e2e (visitor lockout, temp login, forced rotation, console, officer nav hidden, logout)
 
+## Login Motion + Session Audit (build 4)
+- "CLEARANCE GRANTED" radar-sweep interstitial (Kerma icon core, gold/cyan conic sweep, contact pings, progress bar) plays between sign-in and the console
+- Every login records a session (IP, browser/OS, signed-in and last-active times); JWTs carry a session id so revoked sessions die instantly
+- Officers page shows LAST LOGIN per account, a LIVE badge counting sessions active in the last 30 min (auto-refresh 15s), and an expandable per-officer session audit trail
+- Verified: curl chain for session records + Playwright e2e (splash mid-transition, dashboard after, expanded session rows)
+
 ## Mocked / Not Real Yet
 - ALL data is simulated (no real gateway, NVR, scanner, or reader connectivity)
 - No backend persistence; state resets on reload

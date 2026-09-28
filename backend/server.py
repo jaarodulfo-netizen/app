@@ -29,6 +29,7 @@ api_router = APIRouter(prefix="/api")
 JWT_ALGORITHM = "HS256"
 ALLOWED_DOMAINS = {"kermagames.com", "trivelta.com"}
 ACCESS_TTL = timedelta(hours=12)
+ACTIVE_WINDOW = timedelta(minutes=30)
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +68,12 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
-def create_access_token(user_id: str, email: str, role: str) -> str:
+def create_access_token(user_id: str, email: str, role: str, jti: str) -> str:
     payload = {
         "sub": user_id,
         "email": email,
         "role": role,
+        "jti": jti,
         "exp": datetime.now(timezone.utc) + ACCESS_TTL,
         "type": "access",
     }
@@ -82,6 +84,10 @@ def domain_allowed(email: str) -> bool:
     return email.split("@")[-1].lower() in ALLOWED_DOMAINS
 
 
+def iso(v):
+    return v.isoformat() if isinstance(v, datetime) else v
+
+
 def public_user(u: dict) -> dict:
     return {
         "id": str(u["_id"]),
@@ -89,8 +95,23 @@ def public_user(u: dict) -> dict:
         "name": u["name"],
         "role": u["role"],
         "must_change_password": u.get("must_change_password", False),
-        "created_at": u["created_at"].isoformat() if isinstance(u.get("created_at"), datetime) else u.get("created_at"),
+        "last_login": iso(u.get("last_login")),
+        "created_at": iso(u.get("created_at")),
     }
+
+
+def sniff_agent(ua: str) -> str:
+    browser = "Browser"
+    for b in ("Edg", "Chrome", "Firefox", "Safari"):
+        if b in ua:
+            browser = "Edge" if b == "Edg" else b
+            break
+    os_name = "Unknown OS"
+    for o, label in (("Windows", "Windows"), ("Mac OS", "macOS"), ("Android", "Android"), ("iPhone", "iOS"), ("Linux", "Linux")):
+        if o in ua:
+            os_name = label
+            break
+    return f"{browser} · {os_name}"
 
 
 bearer = HTTPBearer(auto_error=False)
@@ -110,6 +131,12 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)
     user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    jti = payload.get("jti")
+    if jti:
+        session = await db.sessions.find_one({"jti": jti})
+        if not session:
+            raise HTTPException(status_code=401, detail="Session revoked")
+        await db.sessions.update_one({"jti": jti}, {"$set": {"last_seen": datetime.now(timezone.utc)}})
     return user
 
 
@@ -147,7 +174,22 @@ async def login(body: LoginBody, request: Request):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
     await db.login_attempts.delete_one({"identifier": ident})
-    token = create_access_token(str(user["_id"]), user["email"], user["role"])
+    now = datetime.now(timezone.utc)
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_login": now}})
+
+    jti = uuid.uuid4().hex
+    await db.sessions.insert_one(
+        {
+            "jti": jti,
+            "user_id": str(user["_id"]),
+            "ip": request.client.host if request.client else "unknown",
+            "agent": sniff_agent(request.headers.get("user-agent", "")),
+            "created_at": now,
+            "last_seen": now,
+        }
+    )
+    token = create_access_token(str(user["_id"]), user["email"], user["role"], jti)
+    user["last_login"] = now
     return {"access_token": token, "token_type": "bearer", "user": public_user(user)}
 
 
@@ -180,33 +222,33 @@ async def change_password(body: ChangePasswordBody, user=Depends(get_current_use
 @api_router.get("/auth/officers")
 async def list_officers(user=Depends(require_commander)):
     users = await db.users.find({}, {"password_hash": 0}).sort("created_at", -1).to_list(200)
-    return [public_user(u) for u in users]
+    cutoff = datetime.now(timezone.utc) - ACTIVE_WINDOW
+    result = []
+    for u in users:
+        entry = public_user(u)
+        entry["active_sessions"] = await db.sessions.count_documents({"user_id": str(u["_id"]), "last_seen": {"$gte": cutoff}})
+        result.append(entry)
+    return result
 
 
-@api_router.post("/auth/officers")
-async def create_officer(body: OfficerCreate, user=Depends(require_commander)):
-    email = body.email.strip().lower()
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="Name is required")
-    if "@" not in email:
-        raise HTTPException(status_code=400, detail="Valid email is required")
-    if not domain_allowed(email):
-        raise HTTPException(status_code=403, detail="Only @kermagames.com or @trivelta.com emails are allowed")
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(status_code=409, detail="An account with this email already exists")
-    temp_password = secrets.token_urlsafe(9)
-    doc = {
-        "email": email,
-        "name": name,
-        "password_hash": hash_password(temp_password),
-        "role": "officer",
-        "must_change_password": True,
-        "created_at": datetime.now(timezone.utc),
-        "created_by": user["email"],
-    }
-    await db.users.insert_one(doc)
-    return {"email": email, "name": name, "role": "officer", "temp_password": temp_password}
+@api_router.get("/auth/officers/{officer_id}/sessions")
+async def officer_sessions(officer_id: str, user=Depends(require_commander)):
+    cutoff = datetime.now(timezone.utc) - ACTIVE_WINDOW
+    sessions = await db.sessions.find({"user_id": officer_id}).sort("created_at", -1).to_list(20)
+    def is_active(s):
+        ls = s.get("last_seen")
+        return bool(ls and ls.replace(tzinfo=timezone.utc) >= cutoff)
+    return [
+        {
+            "id": str(s["_id"]),
+            "ip": s.get("ip"),
+            "agent": s.get("agent"),
+            "created_at": iso(s.get("created_at")),
+            "last_seen": iso(s.get("last_seen")),
+            "active": is_active(s),
+        }
+        for s in sessions
+    ]
 
 
 @api_router.post("/status", response_model=StatusCheck)
@@ -244,6 +286,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 async def startup():
     await db.users.create_index("email", unique=True)
     await db.login_attempts.create_index("identifier")
+    await db.sessions.create_index("jti", unique=True)
+    await db.sessions.create_index("user_id")
     admin_email = os.environ["ADMIN_EMAIL"].strip().lower()
     existing = await db.users.find_one({"email": admin_email})
     if not existing:

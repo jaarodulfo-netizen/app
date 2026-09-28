@@ -41,14 +41,15 @@ export function AuthProvider({ children }) {
     const login = async (email, password) => {
         const { data } = await api.post('/auth/login', { email, password });
         localStorage.setItem('kerma_token', data.access_token);
-        setUser(data.user);
         return data.user;
     };
+
+    const commitSession = (u) => setUser(u);
 
     const logout = () => {
         localStorage.removeItem('kerma_token');
         setUser(null);
     };
 
-    return <AuthContext.Provider value={{ user, setUser, login, logout }}>{children}</AuthContext.Provider>;
+    return <AuthContext.Provider value={{ user, setUser, login, logout, commitSession }}>{children}</AuthContext.Provider>;
 }

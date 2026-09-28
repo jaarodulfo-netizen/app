@@ -1,14 +1,100 @@
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Lock, Mail, LogIn, Loader2, ShieldAlert } from 'lucide-react';
 import { useAuth, formatApiError } from '../context/AuthContext';
 
+function ClearanceSplash({ name, role }) {
+    return (
+        <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0, transition: { duration: 0.5 } }}
+            className="fixed inset-0 z-[60] bg-[#050811] bg-grid flex flex-col items-center justify-center overflow-hidden"
+            data-testid="clearance-splash"
+        >
+            <div className="pointer-events-none absolute -top-32 left-1/3 h-[420px] w-[420px] rounded-full bg-blue-700/15 blur-[130px]" />
+            <div className="pointer-events-none absolute bottom-0 right-1/4 h-[360px] w-[360px] rounded-full bg-[#ea7f2b]/10 blur-[120px]" />
+
+            <div className="relative h-64 w-64 sm:h-72 sm:w-72">
+                <motion.div initial={{ scale: 0.6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }} className="absolute inset-0">
+                    <div className="absolute inset-0 rounded-full border border-sky-500/25" />
+                    <div className="absolute inset-8 rounded-full border border-sky-500/20" />
+                    <div className="absolute inset-16 rounded-full border border-[#ea7f2b]/30" />
+                    <div className="absolute inset-24 rounded-full border border-sky-500/15" />
+                    <div
+                        className="absolute inset-0 rounded-full radar-sweep"
+                        style={{ background: 'conic-gradient(from 0deg, rgba(254,227,150,0.35), rgba(56,189,248,0.18) 55deg, transparent 90deg, transparent 360deg)' }}
+                    />
+                    <div className="absolute left-1/2 top-0 h-full w-px bg-gradient-to-b from-sky-500/20 to-transparent -translate-x-1/2" />
+                    <div className="absolute top-1/2 left-0 w-full h-px bg-gradient-to-r from-sky-500/20 to-transparent -translate-y-1/2" />
+                </motion.div>
+                <motion.div
+                    initial={{ scale: 0, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ delay: 0.35, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+                    className="absolute inset-0 flex items-center justify-center"
+                >
+                    <img src="/kerma-icon.png" alt="Kerma" className="h-20 w-20 rounded-full ring-2 ring-[#ea7f2b]/60 gold-glow object-cover" />
+                </motion.div>
+                {[
+                    { top: '18%', left: '72%' },
+                    { top: '64%', left: '22%' },
+                    { top: '78%', left: '60%' },
+                ].map((pos, i) => (
+                    <motion.span
+                        key={i}
+                        initial={{ opacity: 0, scale: 0 }}
+                        animate={{ opacity: [0, 1, 0.4], scale: 1 }}
+                        transition={{ delay: 0.8 + i * 0.3, duration: 0.5 }}
+                        className="absolute h-1.5 w-1.5 rounded-full bg-[#fee396] gold-glow"
+                        style={pos}
+                    />
+                ))}
+            </div>
+
+            <div className="mt-10 overflow-hidden">
+                <motion.p
+                    initial={{ y: '110%' }}
+                    animate={{ y: 0 }}
+                    transition={{ delay: 0.55, duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                    className="font-display font-extrabold text-2xl sm:text-4xl tracking-[0.12em] text-transparent bg-clip-text bg-gradient-to-r from-sky-300 via-white to-[#fee396]"
+                >
+                    CLEARANCE GRANTED
+                </motion.p>
+            </div>
+            <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ delay: 1, duration: 0.5 }}
+                className="mono text-[10px] sm:text-xs tracking-[0.35em] text-slate-400 mt-4"
+            >
+                {name?.toUpperCase()} · {(role || '').toUpperCase()} · SESSION ENCRYPTED
+            </motion.p>
+            <div className="mt-6 h-0.5 w-56 rounded-full bg-slate-800 overflow-hidden">
+                <motion.div
+                    className="h-full bg-gradient-to-r from-sky-500 via-cyan-400 to-[#ea7f2b]"
+                    initial={{ width: 0 }}
+                    animate={{ width: '100%' }}
+                    transition={{ delay: 0.4, duration: 1.8, ease: 'easeInOut' }}
+                />
+            </div>
+        </motion.div>
+    );
+}
+
 export default function Login() {
-    const { login } = useAuth();
+    const { login, commitSession } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
+    const [granted, setGranted] = useState(null);
+
+    useEffect(() => {
+        if (!granted) return;
+        const t = setTimeout(() => commitSession(granted), 2600);
+        return () => clearTimeout(t);
+    }, [granted, commitSession]);
 
     const submit = async (e) => {
         e.preventDefault();
@@ -16,7 +102,8 @@ export default function Login() {
         setBusy(true);
         setError('');
         try {
-            await login(email, password);
+            const user = await login(email, password);
+            setGranted(user);
         } catch (err) {
             setError(formatApiError(err.response?.data?.detail));
         } finally {
@@ -111,6 +198,8 @@ export default function Login() {
 
                 <p className="mono text-[9px] tracking-[0.25em] text-slate-600 text-center mt-8">KERMA SECURE v2.4.1 · ENCRYPTED SESSION</p>
             </motion.div>
+
+            <AnimatePresence>{granted && <ClearanceSplash name={granted.name} role={granted.role} />}</AnimatePresence>
         </div>
     );
 }
