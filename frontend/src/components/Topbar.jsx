@@ -25,7 +25,7 @@ export function Topbar() {
             <div className="flex items-center gap-4 px-5 sm:px-8 h-16">
                 <div className="flex items-center gap-2.5 rounded-full border border-sky-500/20 bg-sky-500/5 px-4 py-1.5">
                     <Building2 size={14} className="text-sky-400" />
-                    <span className="mono text-[10px] sm:text-xs tracking-widest text-sky-200">HQ NORTH TOWER · FLOOR 04</span>
+                    <span className="mono text-[10px] sm:text-xs tracking-widest text-sky-200">KERMA GAMES · MONTERREY</span>
                 </div>
 
                 <div className="hidden md:flex flex-1 max-w-md items-center gap-2 rounded-full border border-white/5 bg-white/[0.03] px-4 py-2 ml-2">
