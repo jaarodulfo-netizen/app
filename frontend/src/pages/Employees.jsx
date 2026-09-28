@@ -342,7 +342,12 @@ export default function Employees() {
                             </div>
 
                             <div className="mt-4 flex items-center gap-2">
-                                <span className="mono text-xs text-slate-300 bg-white/[0.04] border border-white/5 rounded px-2.5 py-1.5">{emp.cardNo}</span>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {(emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : [])).map((card) => (
+                                        <span key={card} className="mono text-xs text-slate-300 bg-white/[0.04] border border-white/5 rounded px-2.5 py-1.5">{card}</span>
+                                    ))}
+                                    {!emp.cardNo && !emp.cardNos?.length && <span className="mono text-xs text-slate-600">NO CARD</span>}
+                                </div>
                                 <button
                                     data-testid={`copy-card-${emp.id}`}
                                     onClick={() => {
