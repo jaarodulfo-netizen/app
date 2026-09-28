@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
@@ -24,6 +24,7 @@ import asyncio
 import hashlib
 import hmac
 import shutil
+import json
 from datetime import datetime, timezone, timedelta, time
 from zoneinfo import ZoneInfo
 
@@ -124,6 +125,7 @@ class EmployeeIn(BaseModel):
     faceMatch: Optional[str] = None
     level: str = "L1 · GENERAL"
     photoPath: Optional[str] = None
+    doorRights: Optional[dict] = None
 
 
 class CameraIn(BaseModel):
@@ -142,6 +144,8 @@ class DeviceIn(BaseModel):
     fw: str = ""
     detail: str = ""
     signal: int = 95
+    gatewayDeviceId: Optional[str] = None
+    doors: List[int] = []
 
 
 class DoorIn(BaseModel):
@@ -150,6 +154,9 @@ class DoorIn(BaseModel):
     x: float
     y: float
     camId: Optional[str] = None
+    deviceId: Optional[str] = None
+    gatewayDeviceId: Optional[str] = None
+    doorNo: Optional[int] = None
 
 
 class DoorUpdate(BaseModel):
@@ -158,6 +165,9 @@ class DoorUpdate(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     camId: Optional[str] = None
+    deviceId: Optional[str] = None
+    gatewayDeviceId: Optional[str] = None
+    doorNo: Optional[int] = None
 
 
 class AttendanceConfigIn(BaseModel):
@@ -805,6 +815,143 @@ async def attendance_summary(date: Optional[str] = None, user=Depends(get_curren
     }
 
 
+# --- On-premise Kerma Gateway tunnel ---
+gateway_connections: dict[str, WebSocket] = {}
+gateway_pending: dict[str, asyncio.Future] = {}
+
+
+def gateway_event_doc(event: dict) -> dict:
+    when = parse_time(event.get("time"))
+    person = event.get("personName") or event.get("personId") or (("CARD " + str(event.get("cardNo"))) if event.get("cardNo") else "UNKNOWN CREDENTIAL")
+    gateway_device_id = event.get("deviceId")
+    device_name = event.get("deviceName") or gateway_device_id or "UNKNOWN DEVICE"
+    door_no = event.get("doorNo")
+    outcome = str(event.get("outcome") or "granted").lower()
+    result = "granted" if outcome == "granted" else "denied"
+    detail = event.get("description") or ("ACCESS GRANTED" if result == "granted" else "ACCESS DENIED")
+    dedupe = hashlib.sha256(
+        f"gateway|{gateway_device_id}|{event.get('id')}|{when.isoformat()}|{event.get('cardNo')}|{door_no}".encode()
+    ).hexdigest()
+    return {
+        "person": person,
+        "personId": event.get("personId"),
+        "cardNo": str(event.get("cardNo")) if event.get("cardNo") is not None else None,
+        "door": device_name if door_no is None else f"{device_name} · Door {door_no}",
+        "doorCode": f"{gateway_device_id or 'device'}:{door_no or 1}",
+        "zone": "",
+        "method": "FACE" if "face" in str(event.get("description", "")).lower() else ("CARD" if event.get("cardNo") else "OTHER"),
+        "result": result,
+        "detail": detail,
+        "time": when,
+        "dedupeKey": dedupe,
+        "source_device": device_name,
+        "source_device_id": gateway_device_id,
+        "source_serial": None,
+        "source_ip": None,
+        "gateway_device_id": gateway_device_id,
+        "raw_gateway_event": event,
+        "created_at": datetime.now(timezone.utc),
+    }
+
+
+async def send_gateway_command(command: dict, gateway_id: str = "kerma-monterrey"):
+    ws = gateway_connections.get(gateway_id)
+    if not ws:
+        raise HTTPException(status_code=503, detail="Kerma studio gateway is offline")
+    request_id = uuid.uuid4().hex
+    fut = asyncio.get_running_loop().create_future()
+    gateway_pending[request_id] = fut
+    try:
+        await ws.send_json({"type": "command", "requestId": request_id, "command": command})
+        return await asyncio.wait_for(fut, timeout=20)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Kerma studio gateway did not respond")
+    finally:
+        gateway_pending.pop(request_id, None)
+
+
+@app.websocket("/gateway")
+async def gateway_socket(websocket: WebSocket):
+    auth = websocket.headers.get("authorization", "")
+    expected = os.environ.get("GATEWAY_TOKEN", "")
+    supplied = auth[7:] if auth.startswith("Bearer ") else ""
+    if not expected or not supplied or not hmac.compare_digest(supplied.encode(), expected.encode()):
+        await websocket.close(code=1008)
+        return
+
+    await websocket.accept()
+    gateway_id = None
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            msg_type = msg.get("type")
+
+            if msg_type == "register":
+                gateway_id = str(msg.get("gatewayId") or "kerma-monterrey")
+                gateway_connections[gateway_id] = websocket
+                for dev in msg.get("devices") or []:
+                    await db.devices.update_one(
+                        {"gatewayDeviceId": dev.get("id")},
+                        {"$set": {
+                            "gatewayDeviceId": dev.get("id"),
+                            "gatewayId": gateway_id,
+                            "gatewayOnline": bool(dev.get("online")),
+                            "status": "online" if dev.get("online") else "offline",
+                            "doors": dev.get("doors") or [],
+                            "gatewayLastSeen": datetime.now(timezone.utc),
+                        }},
+                    )
+                await websocket.send_json({"type": "registered", "gatewayId": gateway_id, "hubTime": int(datetime.now().timestamp() * 1000)})
+                continue
+
+            if msg_type == "event":
+                event = msg.get("event") or {}
+                doc = gateway_event_doc(event)
+                try:
+                    await db.events.insert_one(doc)
+                except Exception as e:
+                    if "duplicate key" not in str(e):
+                        logger.warning("Gateway event insert failed: %s", e)
+                continue
+
+            if msg_type == "device-status":
+                dev_id = msg.get("deviceId")
+                online = bool(msg.get("online"))
+                await db.devices.update_one(
+                    {"gatewayDeviceId": dev_id},
+                    {"$set": {
+                        "gatewayOnline": online,
+                        "status": "online" if online else "offline",
+                        "gatewayReason": msg.get("reason"),
+                        "gatewayLastSeen": datetime.now(timezone.utc),
+                    }},
+                )
+                continue
+
+            if msg_type == "result":
+                request_id = msg.get("requestId")
+                fut = gateway_pending.get(request_id)
+                if fut and not fut.done():
+                    if msg.get("ok"):
+                        fut.set_result(msg.get("data"))
+                    else:
+                        fut.set_exception(RuntimeError(msg.get("error") or "Gateway command failed"))
+                continue
+
+            if msg_type == "pong":
+                continue
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if gateway_id and gateway_connections.get(gateway_id) is websocket:
+            gateway_connections.pop(gateway_id, None)
+        if gateway_id:
+            await db.devices.update_many(
+                {"gatewayId": gateway_id},
+                {"$set": {"gatewayOnline": False, "status": "offline", "gatewayLastSeen": datetime.now(timezone.utc)}},
+            )
+
+
 # --- File upload (employee photos) ---
 
 @api_router.post("/upload/photo")
@@ -862,11 +1009,33 @@ async def list_employees(user=Depends(get_current_user)):
 
 @api_router.post("/employees")
 async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
+    card_no = str(body.cardNo or "").strip()
+    if not card_no.isdigit() or len(card_no) != 10:
+        raise HTTPException(status_code=400, detail="Card number must be exactly 10 digits, including leading zeros")
+    if await db.employees.find_one({"cardNo": card_no}):
+        raise HTTPException(status_code=409, detail="This card number is already assigned")
+
     doc = body.model_dump()
+    doc["cardNo"] = card_no
     doc["created_at"] = datetime.now(timezone.utc)
     doc["created_by"] = user["email"]
     r = await db.employees.insert_one(doc)
     doc["_id"] = r.inserted_id
+
+    person_id = str(r.inserted_id)
+    credentials = [{"type": "card", "value": card_no}]
+    await send_gateway_command({
+        "kind": "person.upsert",
+        "person": {
+            "id": person_id,
+            "name": body.name.strip(),
+            "userType": "normal",
+            "doorRights": body.doorRights or None,
+        },
+        "credentials": credentials,
+    })
+    await db.employees.update_one({"_id": r.inserted_id}, {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": datetime.now(timezone.utc)}})
+    doc["hardwareSync"] = "synced"
     return doc_id(doc)
 
 
@@ -969,6 +1138,41 @@ async def delete_door(item_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+@api_router.post("/doors/{item_id}/command")
+async def command_door(item_id: str, request: Request, user=Depends(get_current_user)):
+    try:
+        door = await db.doors.find_one({"_id": ObjectId(item_id)})
+    except Exception:
+        door = None
+    if not door:
+        raise HTTPException(status_code=404, detail="Door not found")
+    body = await request.json()
+    cmd = str(body.get("cmd") or "open")
+    if cmd not in {"open", "close", "alwaysOpen", "alwaysClose"}:
+        raise HTTPException(status_code=400, detail="Invalid door command")
+    gateway_device_id = door.get("gatewayDeviceId")
+    door_no = door.get("doorNo")
+    if not gateway_device_id or not door_no:
+        raise HTTPException(status_code=400, detail="This door is not linked to a physical access controller")
+    try:
+        data = await send_gateway_command({
+            "kind": "door.open",
+            "deviceId": gateway_device_id,
+            "doorNo": int(door_no),
+            "cmd": cmd,
+        })
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    new_status = "unlocked" if cmd in {"open", "alwaysOpen"} else "locked"
+    await db.doors.update_one({"_id": door["_id"]}, {"$set": {"status": new_status, "lastCommand": cmd, "lastCommandAt": datetime.now(timezone.utc)}})
+    return {"ok": True, "status": new_status, "gateway": data}
+
+
+@api_router.get("/gateway/status")
+async def gateway_status(user=Depends(get_current_user)):
+    return {"online": "kerma-monterrey" in gateway_connections, "gateway_id": "kerma-monterrey"}
+
+
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):
     status_obj = StatusCheck(**input.model_dump())
@@ -1002,24 +1206,24 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 
 # --- Kerma Monterrey device inventory seed ---
 KERMA_DEVICE_SEED = [
-    {"type": "gateway", "name": "Kerma Monterrey Gateway", "ip": "", "fw": "", "detail": "Gateway ID: kerma-monterrey", "signal": 100},
-    {"type": "face", "name": "VIP Entrance", "ip": "192.168.2.39", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "VIP Exit", "ip": "192.168.1.56", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Turnstile 1 Entrance", "ip": "192.168.3.159", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Turnstile 1 Exit", "ip": "192.168.0.206", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Turnstile 2 Entrance", "ip": "192.168.0.169", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Turnstile 2 Exit", "ip": "192.168.3.4", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Main Inventory", "ip": "192.168.2.226", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Cleaning Storage", "ip": "192.168.1.169", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Roof Stairs", "ip": "192.168.1.124", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Technicians Inventory", "ip": "192.168.3.208", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Attendance Main", "ip": "192.168.0.77", "fw": "", "detail": "Dedicated attendance facial terminal", "signal": 95},
-    {"type": "card", "name": "1st Floor AC", "ip": "192.168.3.111", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
-    {"type": "card", "name": "2nd Floor AC", "ip": "192.168.3.112", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
-    {"type": "card", "name": "Break Room", "ip": "192.168.3.113", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
-    {"type": "card", "name": "3rd Floor AC", "ip": "192.168.3.114", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
-    {"type": "card", "name": "Restrooms", "ip": "192.168.3.115", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
-    {"type": "card", "name": "1st Floor 2nd AC", "ip": "192.168.3.116", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "gateway", "name": "Kerma Monterrey Gateway", "gatewayDeviceId": "kerma-monterrey", "doors": [], "ip": "", "fw": "", "detail": "Gateway ID: kerma-monterrey", "signal": 100},
+    {"type": "face", "name": "VIP Entrance", "gatewayDeviceId": "vip-entrance", "doors": [1], "ip": "192.168.2.39", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "VIP Exit", "gatewayDeviceId": "vip-exit", "doors": [1], "ip": "192.168.1.56", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Turnstile 1 Entrance", "gatewayDeviceId": "torniquete-1-entrada", "doors": [1], "ip": "192.168.3.159", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Turnstile 1 Exit", "gatewayDeviceId": "torniquete-1-salida", "doors": [1], "ip": "192.168.0.206", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Turnstile 2 Entrance", "gatewayDeviceId": "torniquete-2-entrada", "doors": [1], "ip": "192.168.0.169", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Turnstile 2 Exit", "gatewayDeviceId": "torniquete-2-salida", "doors": [1], "ip": "192.168.3.4", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Main Inventory", "gatewayDeviceId": "main-inventory", "doors": [1], "ip": "192.168.2.226", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Cleaning Storage", "gatewayDeviceId": "cleaning-storage", "doors": [1], "ip": "192.168.1.169", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Roof Stairs", "gatewayDeviceId": "roof-stairs", "doors": [1], "ip": "192.168.1.124", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Technicians Inventory", "gatewayDeviceId": "technicians-inventory", "doors": [1], "ip": "192.168.3.208", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
+    {"type": "face", "name": "Attendance Main", "gatewayDeviceId": "attendance-main", "doors": [1], "ip": "192.168.0.77", "fw": "", "detail": "Dedicated attendance facial terminal", "signal": 95},
+    {"type": "card", "name": "1st Floor AC", "gatewayDeviceId": "1st-floor-ac", "doors": [1,2,3,4], "ip": "192.168.3.111", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "2nd Floor AC", "gatewayDeviceId": "2nd-floor-ac", "doors": [1,2,3,4], "ip": "192.168.3.112", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "Break Room", "gatewayDeviceId": "break-room", "doors": [1,2,3,4], "ip": "192.168.3.113", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "3rd Floor AC", "gatewayDeviceId": "3rd-floor-ac", "doors": [1,2,3,4], "ip": "192.168.3.114", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "Restrooms", "gatewayDeviceId": "restrooms", "doors": [1,2,3,4], "ip": "192.168.3.115", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
+    {"type": "card", "name": "1st Floor 2nd AC", "gatewayDeviceId": "1st-floor-2nd-ac", "doors": [1,2,3,4], "ip": "192.168.3.116", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
     {"type": "nvr", "name": "NVR 1", "ip": "192.168.3.101", "fw": "", "detail": "DS-7732NI-M4/16P · HTTP 80 · RTSP 554", "signal": 95},
     {"type": "nvr", "name": "NVR 2", "ip": "192.168.3.102", "fw": "", "detail": "DS-7732NXI-I4/16P · HTTP 80 · RTSP 554", "signal": 95},
 ]
