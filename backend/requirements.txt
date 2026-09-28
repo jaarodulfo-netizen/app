@@ -10,3 +10,4 @@ python-multipart==0.0.32
 requests==2.34.2
 starlette==0.37.2
 uvicorn==0.25.0
+websockets==15.0.1
