@@ -1858,6 +1858,30 @@ async def seed_kerma_doors():
             seq += 1
 
 
+async def migrate_door_status_events_once():
+    marker = await db.app_meta.find_one({"_id": "door_status_events_v1"})
+    if marker:
+        return
+    status_patterns = [
+        "lock released",
+        "lock closed",
+        "exit button pressed",
+        "exit button released",
+        "door opened normally",
+        "door closed normally",
+        "always-open state started",
+        "always-open state ended",
+    ]
+    await db.events.update_many(
+        {"detail": {"$in": status_patterns}},
+        {"$set": {"result": "status", "method": "OTHER"}},
+    )
+    await db.app_meta.insert_one({
+        "_id": "door_status_events_v1",
+        "applied_at": datetime.now(timezone.utc),
+    })
+
+
 async def migrate_hardware_doors_to_unplaced_once():
     marker = await db.app_meta.find_one({"_id": "hardware_doors_unplaced_v1"})
     if marker:
@@ -1914,6 +1938,7 @@ async def startup():
     await seed_kerma_devices()
     await seed_kerma_doors()
     await migrate_hardware_doors_to_unplaced_once()
+    await migrate_door_status_events_once()
     await seed_kerma_people()
     admin_email = os.environ["ADMIN_EMAIL"].strip().lower()
     existing = await db.users.find_one({"email": admin_email})
