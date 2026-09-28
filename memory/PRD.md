@@ -54,6 +54,15 @@ AegisNet Security Command OS — a dark, SOC-grade SaaS interface for building a
 - Officers page shows LAST LOGIN per account, a LIVE badge counting sessions active in the last 30 min (auto-refresh 15s), and an expandable per-officer session audit trail
 - Verified: curl chain for session records + Playwright e2e (splash mid-transition, dashboard after, expanded session rows)
 
+## Real Registry Management (build 5)
+- Employees, cameras and devices (gateways/NVRs/facial scanners/card readers) are now persisted in MongoDB with full add/delete — all sample/fictitious data removed, system starts empty
+- Enrollment: enroll modal saves to the registry; each card has a two-step DELETE (revoke) action
+- Live Feeds: ADD CAMERA modal (label, location, assigned NVR, optional snapshot URL); channels without a frame show "AWAITING FIRST FRAME"; hover a tile to delete; PTZ overlay kept
+- Access Devices: ADD DEVICE modal (type/name/IP/firmware); per-card delete; deleting an NVR unassigns its cameras
+- Dashboard stats, gateway mesh, camera quick view and marquee now compute from real data; empty states with CTAs everywhere
+- Floor map doors remain a sample layout (door placement editor is a separate future step)
+- Verified: curl CRUD chain (create/list/delete for all three collections) + Playwright e2e (add NVR, enroll + delete employee, add camera, empty states)
+
 ## Mocked / Not Real Yet
 - ALL data is simulated (no real gateway, NVR, scanner, or reader connectivity)
 - No backend persistence; state resets on reload

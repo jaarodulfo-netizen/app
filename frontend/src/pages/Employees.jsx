@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ScanFace, X, Copy, RefreshCw, UserPlus, Check, Sparkles } from 'lucide-react';
+import { ScanFace, X, Copy, RefreshCw, UserPlus, Check, Sparkles, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -9,15 +9,37 @@ function Avatar({ emp, size = 'h-14 w-14' }) {
     if (emp.img) {
         return <img src={emp.img} alt={emp.name} className={`${size} rounded-lg object-cover ring-1 ring-sky-500/30`} />;
     }
+    const initials = emp.name.trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
     return (
         <div className={`${size} rounded-lg bg-gradient-to-br from-blue-600/40 to-cyan-500/20 ring-1 ring-sky-500/30 flex items-center justify-center`}>
-            <span className="font-display font-bold text-sky-200 text-sm">{emp.initials}</span>
+            <span className="font-display font-bold text-sky-200 text-sm">{initials}</span>
         </div>
     );
 }
 
+function DeleteButton({ onConfirm, testid }) {
+    const [armed, setArmed] = useState(false);
+    useEffect(() => {
+        if (!armed) return;
+        const t = setTimeout(() => setArmed(false), 2600);
+        return () => clearTimeout(t);
+    }, [armed]);
+    return (
+        <button
+            data-testid={testid}
+            onClick={() => (armed ? onConfirm() : setArmed(true))}
+            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 mono text-[9px] tracking-widest transition-colors duration-200 ${
+                armed ? 'border-red-500/60 bg-red-500/15 text-red-300' : 'border-white/10 text-slate-500 hover:text-red-300 hover:border-red-400/40'
+            }`}
+        >
+            <Trash2 size={12} />
+            {armed ? 'CONFIRM' : 'DELETE'}
+        </button>
+    );
+}
+
 function EnrollModal({ open, onClose }) {
-    const { enrollEmployee } = useSecurity();
+    const { addEmployee } = useSecurity();
     const [name, setName] = useState('');
     const [role, setRole] = useState('');
     const [level, setLevel] = useState('L1 · GENERAL');
@@ -25,6 +47,7 @@ function EnrollModal({ open, onClose }) {
     const [faceState, setFaceState] = useState('idle');
     const [progress, setProgress] = useState(0);
     const [match, setMatch] = useState(null);
+    const [saving, setSaving] = useState(false);
 
     useEffect(() => {
         if (faceState !== 'scanning') return;
@@ -46,12 +69,18 @@ function EnrollModal({ open, onClose }) {
         setName(''); setRole(''); setLevel('L1 · GENERAL'); setCardNo(''); setFaceState('idle'); setProgress(0); setMatch(null);
     };
 
-    const submit = () => {
-        const initials = name.trim().split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-        enrollEmployee({ name, role: role || 'Staff Member', cardNo, faceSync: true, faceMatch: match, level, initials, lastSeen: 'Just enrolled' });
-        toast.success('PROFILE SYNCHRONIZED', { description: `${name} pushed to 3 facial scanners · 5 card readers` });
-        reset();
-        onClose();
+    const submit = async () => {
+        setSaving(true);
+        try {
+            await addEmployee({ name: name.trim(), role: role.trim() || 'Staff Member', cardNo, faceSync: true, faceMatch: match, level });
+            toast.success('PROFILE SYNCHRONIZED', { description: `${name} saved to registry · ready to push to scanners` });
+            reset();
+            onClose();
+        } catch (e) {
+            toast.error('ENROLL FAILED', { description: 'Could not save employee — try again' });
+        } finally {
+            setSaving(false);
+        }
     };
 
     const valid = name.trim().length > 1 && cardNo && faceState === 'done';
@@ -184,17 +213,17 @@ function EnrollModal({ open, onClose }) {
                         </div>
 
                         <div className="mt-7 flex items-center justify-between gap-3 border-t border-white/5 pt-5">
-                            <p className="mono text-[9px] tracking-widest text-slate-600 hidden sm:block">SYNCS TO FS-01/02/03 + CR-01…05 ON SUBMIT</p>
+                            <p className="mono text-[9px] tracking-widest text-slate-600 hidden sm:block">STORED IN REGISTRY · PUSH TO SCANNERS FROM THE CARD</p>
                             <button
                                 data-testid="enroll-submit-btn"
                                 onClick={submit}
-                                disabled={!valid}
+                                disabled={!valid || saving}
                                 className={`flex items-center gap-2 rounded-full px-7 py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
-                                    valid ? 'bg-sky-500 text-[#04121f] hover:bg-cyan-400' : 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                                    valid && !saving ? 'bg-sky-500 text-[#04121f] hover:bg-cyan-400' : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                                 }`}
                             >
-                                <UserPlus size={15} />
-                                ENROLL & SYNC
+                                {saving ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />}
+                                {saving ? 'SAVING…' : 'ENROLL & SYNC'}
                             </button>
                         </div>
                     </motion.div>
@@ -205,21 +234,21 @@ function EnrollModal({ open, onClose }) {
 }
 
 export default function Employees() {
-    const { employees } = useSecurity();
+    const { employees, deleteEmployee } = useSecurity();
     const [open, setOpen] = useState(false);
-    const [syncing, setSyncing] = useState(null);
 
-    const syncDevice = (emp) => {
-        setSyncing(emp.id);
-        setTimeout(() => {
-            setSyncing(null);
-            toast.success('CREDENTIALS SYNCED', { description: `${emp.name} · ${emp.cardNo} pushed to gateway mesh` });
-        }, 1200);
+    const remove = async (emp) => {
+        try {
+            await deleteEmployee(emp.id);
+            toast.success('CREDENTIAL REVOKED', { description: `${emp.name} removed from the registry` });
+        } catch (e) {
+            toast.error('DELETE FAILED', { description: 'Could not remove employee — try again' });
+        }
     };
 
     return (
         <div className="space-y-6" data-testid="employees-page">
-            <PageHeader eyebrow={`PERSONNEL REGISTRY // ${employees.length} ACTIVE CREDENTIALS`} title="Employee Enrollment">
+            <PageHeader eyebrow={`PERSONNEL REGISTRY // ${employees ? `${employees.length} ACTIVE CREDENTIALS` : 'SYNCING…'}`} title="Employee Enrollment">
                 <button
                     data-testid="enroll-open-btn"
                     onClick={() => setOpen(true)}
@@ -230,64 +259,70 @@ export default function Employees() {
                 </button>
             </PageHeader>
 
-            <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
-                {employees.map((emp, i) => (
-                    <motion.div
-                        key={emp.id}
-                        data-testid={`employee-card-${emp.id}`}
-                        initial={{ opacity: 0, y: 22 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: Math.min(i * 0.06, 0.5), duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-                        className="aegis-panel rounded-xl p-5 transition-colors duration-300 hover:border-sky-400/40"
-                    >
-                        <div className="flex items-start gap-4">
-                            <Avatar emp={emp} />
-                            <div className="min-w-0 flex-1">
-                                <p className="font-head font-bold text-slate-100 tracking-wide truncate">{emp.name}</p>
-                                <p className="text-xs text-slate-500 mt-0.5 truncate">{emp.role}</p>
-                                <span className="inline-block mt-2 mono text-[9px] tracking-widest text-sky-300 border border-sky-500/25 bg-sky-500/5 rounded px-2 py-0.5">
-                                    {emp.level}
+            {employees === null ? (
+                <p className="mono text-xs tracking-widest text-slate-600 py-16 text-center">LOADING REGISTRY…</p>
+            ) : employees.length === 0 ? (
+                <button
+                    data-testid="empty-employees-cta"
+                    onClick={() => setOpen(true)}
+                    className="flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-sky-500/25 py-20 transition-colors duration-200 hover:border-[#ea7f2b]/50 hover:bg-[#ea7f2b]/5"
+                >
+                    <UserPlus size={28} className="text-sky-500/60" />
+                    <p className="mono text-[10px] tracking-[0.25em] text-slate-500">REGISTRY EMPTY · ENROLL YOUR FIRST EMPLOYEE</p>
+                </button>
+            ) : (
+                <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
+                    {employees.map((emp, i) => (
+                        <motion.div
+                            key={emp.id}
+                            data-testid={`employee-card-${emp.id}`}
+                            initial={{ opacity: 0, y: 22 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: Math.min(i * 0.06, 0.5), duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+                            className="aegis-panel rounded-xl p-5 transition-colors duration-300 hover:border-sky-400/40"
+                        >
+                            <div className="flex items-start gap-4">
+                                <Avatar emp={emp} />
+                                <div className="min-w-0 flex-1">
+                                    <p className="font-head font-bold text-slate-100 tracking-wide truncate">{emp.name}</p>
+                                    <p className="text-xs text-slate-500 mt-0.5 truncate">{emp.role}</p>
+                                    <span className="inline-block mt-2 mono text-[9px] tracking-widest text-sky-300 border border-sky-500/25 bg-sky-500/5 rounded px-2 py-0.5">
+                                        {emp.level}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div className="mt-4 flex items-center gap-2">
+                                <span className="mono text-xs text-slate-300 bg-white/[0.04] border border-white/5 rounded px-2.5 py-1.5">{emp.cardNo}</span>
+                                <button
+                                    data-testid={`copy-card-${emp.id}`}
+                                    onClick={() => {
+                                        try { navigator.clipboard.writeText(emp.cardNo); } catch (e) { /* noop */ }
+                                        toast.info('CARD NUMBER COPIED', { description: emp.cardNo });
+                                    }}
+                                    className="rounded-md border border-white/10 p-1.5 text-slate-400 transition-colors duration-200 hover:text-sky-300 hover:border-sky-400/40"
+                                >
+                                    <Copy size={12} />
+                                </button>
+                                <span
+                                    className={`ml-auto mono text-[9px] tracking-widest rounded border px-2 py-1 ${
+                                        emp.faceSync
+                                            ? 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10'
+                                            : 'text-orange-300 border-orange-400/30 bg-orange-400/10'
+                                    }`}
+                                >
+                                    {emp.faceSync ? `FACE SYNCED · ${emp.faceMatch}%` : 'FACE PENDING'}
                                 </span>
                             </div>
-                        </div>
 
-                        <div className="mt-4 flex items-center gap-2">
-                            <span className="mono text-xs text-slate-300 bg-white/[0.04] border border-white/5 rounded px-2.5 py-1.5">{emp.cardNo}</span>
-                            <button
-                                data-testid={`copy-card-${emp.id}`}
-                                onClick={() => {
-                                    try { navigator.clipboard.writeText(emp.cardNo); } catch (e) { /* noop */ }
-                                    toast.info('CARD NUMBER COPIED', { description: emp.cardNo });
-                                }}
-                                className="rounded-md border border-white/10 p-1.5 text-slate-400 transition-colors duration-200 hover:text-sky-300 hover:border-sky-400/40"
-                            >
-                                <Copy size={12} />
-                            </button>
-                            <span
-                                className={`ml-auto mono text-[9px] tracking-widest rounded border px-2 py-1 ${
-                                    emp.faceSync
-                                        ? 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10'
-                                        : 'text-orange-300 border-orange-400/30 bg-orange-400/10'
-                                }`}
-                            >
-                                {emp.faceSync ? `FACE SYNCED · ${emp.faceMatch}%` : 'FACE PENDING'}
-                            </span>
-                        </div>
-
-                        <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
-                            <p className="mono text-[9px] tracking-wider text-slate-600">{emp.lastSeen.toUpperCase()}</p>
-                            <button
-                                data-testid={`sync-employee-${emp.id}`}
-                                onClick={() => syncDevice(emp)}
-                                className="flex items-center gap-1.5 mono text-[10px] tracking-widest text-sky-400 transition-colors duration-200 hover:text-cyan-300"
-                            >
-                                <RefreshCw size={12} className={syncing === emp.id ? 'animate-spin' : ''} />
-                                {syncing === emp.id ? 'SYNCING…' : 'SYNC DEVICES'}
-                            </button>
-                        </div>
-                    </motion.div>
-                ))}
-            </div>
+                            <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
+                                <p className="mono text-[9px] tracking-wider text-slate-600">ENROLLED {emp.created_at ? new Date(emp.created_at).toLocaleDateString() : ''}</p>
+                                <DeleteButton testid={`delete-employee-${emp.id}`} onConfirm={() => remove(emp)} />
+                            </div>
+                        </motion.div>
+                    ))}
+                </div>
+            )}
 
             <EnrollModal open={open} onClose={() => setOpen(false)} />
         </div>

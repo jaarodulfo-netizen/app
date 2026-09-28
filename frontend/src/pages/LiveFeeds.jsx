@@ -1,23 +1,47 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { X, Plus, Minus, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, VideoOff } from 'lucide-react';
+import { X, Plus, Minus, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, VideoOff, Cctv, Trash2, Loader2 } from 'lucide-react';
 import dayjs from 'dayjs';
+import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
-import { useNow } from '../context/SecurityContext';
-import { CAMERAS } from '../data/mockData';
+import { useNow, useSecurity } from '../context/SecurityContext';
 
-function CamTile({ cam, onZoom, large = false }) {
+function DeleteChip({ onConfirm, testid }) {
+    const [armed, setArmed] = useState(false);
+    useEffect(() => {
+        if (!armed) return;
+        const t = setTimeout(() => setArmed(false), 2600);
+        return () => clearTimeout(t);
+    }, [armed]);
+    return (
+        <button
+            data-testid={testid}
+            onClick={(e) => {
+                e.stopPropagation();
+                armed ? onConfirm() : setArmed(true);
+            }}
+            className={`absolute right-3 top-9 z-10 flex items-center gap-1 rounded border px-1.5 py-1 mono text-[9px] tracking-widest opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${
+                armed ? 'border-red-500/60 bg-red-500/20 text-red-300' : 'border-white/15 bg-black/60 text-slate-300 hover:text-red-300'
+            }`}
+        >
+            <Trash2 size={11} />
+            {armed ? 'SURE?' : ''}
+        </button>
+    );
+}
+
+function CamTile({ cam, onZoom, onDelete, large = false }) {
     const now = useNow(1000);
     const live = cam.status === 'live';
     return (
         <div
-            data-testid={`cam-tile-${cam.code.toLowerCase()}`}
+            data-testid={`cam-tile-${(cam.code || 'x').toLowerCase()}`}
             onClick={() => live && onZoom && onZoom(cam)}
             className={`group relative aspect-video overflow-hidden rounded-lg border bg-black scanlines ${
                 live ? 'border-sky-500/15 cursor-pointer transition-colors duration-300 hover:border-sky-400/50' : 'border-red-500/20'
             }`}
         >
-            {live ? (
+            {cam.img ? (
                 <>
                     <img
                         src={cam.img}
@@ -26,35 +50,37 @@ function CamTile({ cam, onZoom, large = false }) {
                         style={{ filter: 'grayscale(45%) contrast(1.12) brightness(0.78) saturate(0.75)' }}
                     />
                     <div className="absolute inset-0 bg-sky-900/20 mix-blend-overlay" />
-                    <span
-                        className="absolute right-3 top-1/3 mono text-[9px] tracking-widest text-[#fee396] border border-[#ea7f2b]/40 bg-[#ea7f2b]/10 rounded px-1.5 py-0.5 motion-flicker"
-                        style={{ animationDelay: `${(parseInt(cam.code.slice(-1), 10) * 1.7) % 6}s` }}
-                    >
-                        MOTION
-                    </span>
-                    {!large && (
-                        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                            <div className="grid grid-cols-3 gap-1 rounded-lg bg-black/50 backdrop-blur-md p-2 border border-sky-500/30">
-                                <span />
-                                <button data-testid={`ptz-up-${cam.code.toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronUp size={14} /></button>
-                                <button data-testid={`ptz-zoom-in-${cam.code.toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><Plus size={14} /></button>
-                                <button data-testid={`ptz-left-${cam.code.toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronLeft size={14} /></button>
-                                <span />
-                                <button data-testid={`ptz-right-${cam.code.toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronRight size={14} /></button>
-                                <span />
-                                <button data-testid={`ptz-down-${cam.code.toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronDown size={14} /></button>
-                                <button data-testid={`ptz-zoom-out-${cam.code.toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><Minus size={14} /></button>
-                            </div>
-                        </div>
-                    )}
                 </>
+            ) : live ? (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-grid">
+                    <Cctv size={large ? 34 : 22} className="text-sky-500/50" />
+                    <p className={`mono tracking-[0.35em] text-sky-400/70 ${large ? 'text-sm' : 'text-[10px]'}`}>AWAITING FIRST FRAME</p>
+                    <p className="mono text-[9px] tracking-widest text-slate-600">CHANNEL REGISTERED · CONNECTING TO NVR</p>
+                </div>
             ) : (
                 <div className="absolute inset-0">
                     <div className="static-noise absolute inset-0 opacity-50" />
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-2">
                         <VideoOff size={large ? 34 : 22} className="text-red-400/70" />
                         <p className={`mono tracking-[0.35em] text-red-400 ${large ? 'text-base' : 'text-xs'}`}>NO SIGNAL</p>
-                        <p className="mono text-[9px] tracking-widest text-slate-600">SIGNAL LOST · LAST FRAME 04:12:33</p>
+                    </div>
+                </div>
+            )}
+
+            {onDelete && <DeleteChip testid={`delete-cam-${cam.id}`} onConfirm={() => onDelete(cam)} />}
+
+            {live && !large && (
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    <div className="grid grid-cols-3 gap-1 rounded-lg bg-black/50 backdrop-blur-md p-2 border border-sky-500/30">
+                        <span />
+                        <button data-testid={`ptz-up-${(cam.code || 'x').toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronUp size={14} /></button>
+                        <button data-testid={`ptz-zoom-in-${(cam.code || 'x').toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><Plus size={14} /></button>
+                        <button data-testid={`ptz-left-${(cam.code || 'x').toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronLeft size={14} /></button>
+                        <span />
+                        <button data-testid={`ptz-right-${(cam.code || 'x').toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronRight size={14} /></button>
+                        <span />
+                        <button data-testid={`ptz-down-${(cam.code || 'x').toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronDown size={14} /></button>
+                        <button data-testid={`ptz-zoom-out-${(cam.code || 'x').toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><Minus size={14} /></button>
                     </div>
                 </div>
             )}
@@ -70,36 +96,164 @@ function CamTile({ cam, onZoom, large = false }) {
                 <p className={`mono tracking-widest text-sky-200 ${large ? 'text-sm' : 'text-[10px]'}`}>
                     {cam.code} · {cam.label}
                 </p>
-                <p className="mono text-[9px] tracking-widest text-slate-500 mt-0.5">{cam.location.toUpperCase()}</p>
+                <p className="mono text-[9px] tracking-widest text-slate-500 mt-0.5">
+                    {(cam.location || 'UNASSIGNED ZONE').toUpperCase()}
+                    {cam.nvrName ? ` · ${cam.nvrName.toUpperCase()}` : ''}
+                </p>
             </div>
         </div>
     );
 }
 
+function AddCameraModal({ open, onClose }) {
+    const { addCamera, devices } = useSecurity();
+    const nvrs = (devices || []).filter((d) => d.type === 'nvr');
+    const [label, setLabel] = useState('');
+    const [location, setLocation] = useState('');
+    const [nvr, setNvr] = useState('');
+    const [img, setImg] = useState('');
+    const [saving, setSaving] = useState(false);
+
+    const submit = async (e) => {
+        e.preventDefault();
+        setSaving(true);
+        try {
+            const nvrDoc = nvrs.find((n) => n.id === nvr);
+            await addCamera({ label: label.trim().toUpperCase(), location: location.trim(), nvr, nvrName: nvrDoc?.name || '', img: img.trim() || null });
+            toast.success('CAMERA REGISTERED', { description: label.toUpperCase() });
+            setLabel(''); setLocation(''); setNvr(''); setImg('');
+            onClose();
+        } catch (err) {
+            toast.error('REGISTER FAILED', { description: 'Could not save camera — try again' });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <AnimatePresence>
+            {open && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
+                    <motion.div
+                        data-testid="add-camera-modal"
+                        initial={{ opacity: 0, y: 24, scale: 0.97 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 24 }}
+                        transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                        className="relative w-full max-w-md rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8"
+                    >
+                        <div className="flex items-start justify-between">
+                            <div>
+                                <p className="mono text-[10px] tracking-[0.35em] text-sky-400">NVR CHANNEL</p>
+                                <h2 className="font-display text-xl font-bold text-white mt-2">Register Camera</h2>
+                            </div>
+                            <button data-testid="add-camera-close-btn" onClick={onClose} className="rounded-full border border-white/10 p-2 text-slate-400 hover:bg-white/10 hover:text-white transition-colors duration-200">
+                                <X size={15} />
+                            </button>
+                        </div>
+                        <form onSubmit={submit} className="mt-6 space-y-4">
+                            <div>
+                                <label className="mono text-[10px] tracking-widest text-slate-500">CHANNEL LABEL</label>
+                                <input data-testid="camera-label-input" value={label} onChange={(e) => setLabel(e.target.value)} required placeholder="e.g. LOBBY ENTRANCE"
+                                    className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60 transition-colors duration-200" />
+                            </div>
+                            <div>
+                                <label className="mono text-[10px] tracking-widest text-slate-500">LOCATION</label>
+                                <input data-testid="camera-location-input" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="e.g. Floor 04 · North"
+                                    className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60 transition-colors duration-200" />
+                            </div>
+                            <div>
+                                <label className="mono text-[10px] tracking-widest text-slate-500">ASSIGNED NVR</label>
+                                <select data-testid="camera-nvr-select" value={nvr} onChange={(e) => setNvr(e.target.value)}
+                                    className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60 transition-colors duration-200">
+                                    <option value="">UNASSIGNED</option>
+                                    {nvrs.map((n) => (
+                                        <option key={n.id} value={n.id}>{n.name}</option>
+                                    ))}
+                                </select>
+                                {nvrs.length === 0 && <p className="mono text-[9px] tracking-wider text-orange-300/80 mt-2">NO NVRS YET · ADD ONE IN ACCESS DEVICES</p>}
+                            </div>
+                            <div>
+                                <label className="mono text-[10px] tracking-widest text-slate-500">SNAPSHOT URL · OPTIONAL</label>
+                                <input data-testid="camera-img-input" value={img} onChange={(e) => setImg(e.target.value)} placeholder="https://…/frame.jpg"
+                                    className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 mono text-xs text-sky-200 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60 transition-colors duration-200" />
+                            </div>
+                            <button data-testid="add-camera-submit-btn" type="submit" disabled={saving}
+                                className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
+                                    saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
+                                }`}>
+                                {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
+                                {saving ? 'REGISTERING…' : 'REGISTER CHANNEL'}
+                            </button>
+                        </form>
+                    </motion.div>
+                </motion.div>
+            )}
+        </AnimatePresence>
+    );
+}
+
 export default function LiveFeeds() {
+    const { cameras, deleteCamera } = useSecurity();
     const [zoom, setZoom] = useState(null);
-    const liveCount = CAMERAS.filter((c) => c.status === 'live').length;
+    const [addOpen, setAddOpen] = useState(false);
+    const list = cameras || [];
+    const liveCount = list.filter((c) => c.status === 'live').length;
+
+    const remove = async (cam) => {
+        try {
+            await deleteCamera(cam.id);
+            toast.success('CHANNEL REMOVED', { description: `${cam.code} · ${cam.label}` });
+        } catch (e) {
+            toast.error('DELETE FAILED', { description: 'Could not remove camera — try again' });
+        }
+    };
 
     return (
         <div className="space-y-6" data-testid="feeds-page">
-            <PageHeader eyebrow={`NVR-01 // ${liveCount} OF ${CAMERAS.length} CHANNELS LIVE`} title="Live Video Grid">
-                <span className="flex items-center gap-2 mono text-[10px] tracking-widest text-red-400 border border-red-400/30 bg-red-400/10 rounded-full px-4 py-2">
-                    <span className="h-1.5 w-1.5 rounded-full bg-red-500 rec-blink" /> RECORDING · 30 DAY RETENTION
-                </span>
+            <PageHeader eyebrow={cameras === null ? 'NVR // SYNCING…' : `NVR GRID // ${liveCount} OF ${list.length} CHANNELS LIVE`} title="Live Video Grid">
+                <div className="flex items-center gap-3">
+                    <span className="hidden sm:flex items-center gap-2 mono text-[10px] tracking-widest text-red-400 border border-red-400/30 bg-red-400/10 rounded-full px-4 py-2">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500 rec-blink" /> RECORDING
+                    </span>
+                    <button
+                        data-testid="add-camera-open-btn"
+                        onClick={() => setAddOpen(true)}
+                        className="flex items-center gap-2 rounded-full bg-sky-500 px-5 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] transition-colors duration-200 hover:bg-cyan-400"
+                    >
+                        <Plus size={15} /> ADD CAMERA
+                    </button>
+                </div>
             </PageHeader>
 
-            <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">
-                {CAMERAS.map((cam, i) => (
-                    <motion.div
-                        key={cam.id}
-                        initial={{ opacity: 0, y: 24 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.07, duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
-                    >
-                        <CamTile cam={cam} onZoom={setZoom} />
-                    </motion.div>
-                ))}
-            </div>
+            {cameras === null ? (
+                <p className="mono text-xs tracking-widest text-slate-600 py-16 text-center">CONNECTING TO NVR GRID…</p>
+            ) : list.length === 0 ? (
+                <button
+                    data-testid="empty-cameras-cta"
+                    onClick={() => setAddOpen(true)}
+                    className="flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-sky-500/25 py-20 transition-colors duration-200 hover:border-[#ea7f2b]/50 hover:bg-[#ea7f2b]/5"
+                >
+                    <Cctv size={28} className="text-sky-500/60" />
+                    <p className="mono text-[10px] tracking-[0.25em] text-slate-500">NO CAMERAS REGISTERED · ADD YOUR FIRST NVR CHANNEL</p>
+                </button>
+            ) : (
+                <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">
+                    {list.map((cam, i) => (
+                        <motion.div
+                            key={cam.id}
+                            initial={{ opacity: 0, y: 24 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: Math.min(i * 0.07, 0.4), duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+                        >
+                            <CamTile cam={cam} onZoom={setZoom} onDelete={remove} />
+                        </motion.div>
+                    ))}
+                </div>
+            )}
+
+            <AddCameraModal open={addOpen} onClose={() => setAddOpen(false)} />
 
             <AnimatePresence>
                 {zoom && (

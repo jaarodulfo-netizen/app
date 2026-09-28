@@ -4,7 +4,6 @@ import { LockOpen, BellOff, Loader2, ShieldAlert } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { FloorPlan } from '../components/FloorPlan';
 import { useSecurity } from '../context/SecurityContext';
-import { CAMERAS } from '../data/mockData';
 
 const STATUS_META = {
     locked: { label: 'LOCKED', cls: 'text-sky-300 border-sky-400/30 bg-sky-400/10', dot: 'bg-sky-400' },
@@ -14,10 +13,10 @@ const STATUS_META = {
 };
 
 export default function FloorMap() {
-    const { doors, openDoor, silenceDoor } = useSecurity();
+    const { doors, openDoor, silenceDoor, cameras } = useSecurity();
     const [selectedId, setSelectedId] = useState('d-01');
     const selected = doors.find((d) => d.id === selectedId);
-    const cam = selected ? CAMERAS.find((c) => c.id === selected.camId) : null;
+    const cam = selected && selected.camId ? (cameras || []).find((c) => c.id === selected.camId) : null;
     const meta = STATUS_META[selected.status];
 
     return (

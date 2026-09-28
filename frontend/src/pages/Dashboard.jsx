@@ -1,31 +1,53 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, animate } from 'framer-motion';
-import { Users, DoorOpen, Video, AlertTriangle, ArrowRight, ScanFace, Activity } from 'lucide-react';
+import { Users, DoorOpen, Video, AlertTriangle, ArrowRight, ScanFace, Activity, Cctv } from 'lucide-react';
 import { useSecurity } from '../context/SecurityContext';
 import { FloorPlan } from '../components/FloorPlan';
 import { EventsFeed } from '../components/EventsFeed';
-import { CAMERAS, DEVICES, MARQUEE_ITEMS } from '../data/mockData';
+import { MARQUEE_FALLBACK } from '../data/mockData';
 
 function AnimatedNumber({ value, pad = 0 }) {
     const [display, setDisplay] = useState(0);
     useEffect(() => {
-        const c = animate(0, value, { duration: 1.5, ease: 'easeOut', onUpdate: (v) => setDisplay(Math.round(v)) });
+        const c = animate(0, value, { duration: 1.2, ease: 'easeOut', onUpdate: (v) => setDisplay(Math.round(v)) });
         return () => c.stop();
     }, [value]);
     return <span className="tabular-nums">{String(display).padStart(pad, '0')}</span>;
 }
 
-const STATS = [
-    { id: 'people', label: 'PEOPLE INSIDE', value: 142, total: 200, icon: Users, accent: 'text-sky-300', bar: 'from-sky-500 to-cyan-400', pct: 71 },
-    { id: 'doors', label: 'DOORS ONLINE', value: 18, total: 20, icon: DoorOpen, accent: 'text-emerald-300', bar: 'from-emerald-500 to-teal-400', pct: 90 },
-    { id: 'cams', label: 'NVR CAMERAS LIVE', value: 4, total: 6, icon: Video, accent: 'text-sky-300', bar: 'from-sky-500 to-blue-500', pct: 67 },
-    { id: 'alerts', label: 'CRITICAL ALERTS', value: 2, total: null, icon: AlertTriangle, accent: 'text-red-400', bar: 'from-red-500 to-[#ea7f2b]', pct: 100, pad: 2 },
-];
-
 export default function Dashboard() {
-    const { doors } = useSecurity();
+    const { doors, employees, cameras, devices } = useSecurity();
     const navigate = useNavigate();
+
+    const enrolled = employees?.length ?? 0;
+    const doorsOnline = doors.filter((d) => d.status !== 'alarm').length;
+    const camList = cameras || [];
+    const camsLive = camList.filter((c) => c.status === 'live').length;
+    const alarms = doors.filter((d) => d.status === 'alarm').length;
+    const devList = devices || [];
+    const devOnline = devList.filter((d) => d.status === 'online').length;
+
+    const STATS = [
+        { id: 'people', label: 'ENROLLED PERSONNEL', value: enrolled, icon: Users, accent: 'text-sky-300', bar: 'from-sky-500 to-cyan-400', pct: enrolled ? 100 : 0 },
+        { id: 'doors', label: 'DOORS ONLINE', value: doorsOnline, total: doors.length, icon: DoorOpen, accent: 'text-emerald-300', bar: 'from-emerald-500 to-teal-400', pct: Math.round((doorsOnline / doors.length) * 100) },
+        { id: 'cams', label: 'CAMERAS LIVE', value: camsLive, total: camList.length || null, icon: Video, accent: 'text-sky-300', bar: 'from-sky-500 to-blue-500', pct: camList.length ? Math.round((camsLive / camList.length) * 100) : 0 },
+        { id: 'alerts', label: 'CRITICAL ALERTS', value: alarms, icon: AlertTriangle, accent: 'text-red-400', bar: 'from-red-500 to-[#ea7f2b]', pct: alarms ? 100 : 0, pad: 2 },
+    ];
+
+    const marqueeItems =
+        devList.length || enrolled || camList.length
+            ? [
+                  `${devOnline}/${devList.length} HARDWARE NODES ONLINE`,
+                  `${enrolled} CREDENTIALS ENROLLED`,
+                  `${camsLive}/${camList.length} CHANNELS STREAMING`,
+                  'PERIMETER ARMED · LEVEL 2',
+                  'SYSTEM NOMINAL',
+                  'ALL TELEMETRY ENCRYPTED',
+              ]
+            : MARQUEE_FALLBACK;
+
+    const previewCams = camList.filter((c) => c.img).slice(0, 4);
 
     return (
         <div className="space-y-6" data-testid="dashboard-page">
@@ -90,11 +112,6 @@ export default function Dashboard() {
                         <ScanFace size={16} />
                         ENROLL EMPLOYEE
                     </Link>
-                    <div className="hidden md:flex items-center gap-5 ml-4 mono text-[10px] tracking-widest text-slate-500">
-                        <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> GATEWAY ONLINE</span>
-                        <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-red-500 rec-blink" /> NVR REC</span>
-                        <span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-[#ea7f2b]" /> PERIMETER ARMED</span>
-                    </div>
                 </motion.div>
             </section>
 
@@ -115,7 +132,7 @@ export default function Dashboard() {
                         </div>
                         <p className={`mt-4 font-display text-3xl sm:text-4xl font-bold ${s.accent}`}>
                             <AnimatedNumber value={s.value} pad={s.pad || 0} />
-                            {s.total && <span className="text-lg text-slate-600 font-head font-semibold"> / {s.total}</span>}
+                            {s.total != null && <span className="text-lg text-slate-600 font-head font-semibold"> / {s.total}</span>}
                         </p>
                         <div className="mt-4 h-1 rounded-full bg-slate-800 overflow-hidden">
                             <motion.div
@@ -170,20 +187,31 @@ export default function Dashboard() {
                     </div>
 
                     <div className="aegis-panel rounded-xl p-5">
-                        <h2 className="font-head font-bold tracking-wider text-slate-100 mb-4">GATEWAY MESH</h2>
-                        <div className="space-y-3">
-                            {DEVICES.slice(0, 4).map((d) => (
-                                <div key={d.id} className="flex items-center gap-3">
-                                    <span
-                                        className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                                            d.status === 'online' ? 'bg-emerald-400' : d.status === 'degraded' ? 'bg-[#ea7f2b]' : 'bg-red-500'
-                                        }`}
-                                    />
-                                    <span className="text-xs text-slate-300 flex-1 truncate">{d.name}</span>
-                                    <span className="mono text-[10px] text-slate-500">{d.status === 'offline' ? 'DOWN' : `${d.signal}%`}</span>
-                                </div>
-                            ))}
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="font-head font-bold tracking-wider text-slate-100">GATEWAY MESH</h2>
+                            <Link to="/devices" className="mono text-[10px] tracking-widest text-sky-400 hover:text-[#fee396] transition-colors duration-200">
+                                MANAGE →
+                            </Link>
                         </div>
+                        {devList.length === 0 ? (
+                            <p className="mono text-[10px] tracking-widest text-slate-600 py-3">
+                                NO DEVICES REGISTERED · <Link to="/devices" className="text-sky-400 hover:text-[#fee396]">ADD YOUR FIRST NVR →</Link>
+                            </p>
+                        ) : (
+                            <div className="space-y-3">
+                                {devList.slice(0, 4).map((d) => (
+                                    <div key={d.id} className="flex items-center gap-3">
+                                        <span
+                                            className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                                                d.status === 'online' ? 'bg-emerald-400' : d.status === 'degraded' ? 'bg-[#ea7f2b]' : 'bg-red-500'
+                                            }`}
+                                        />
+                                        <span className="text-xs text-slate-300 flex-1 truncate">{d.name}</span>
+                                        <span className="mono text-[10px] text-slate-500">{d.status === 'offline' ? 'DOWN' : `${d.signal}%`}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
                     </div>
                 </motion.div>
             </section>
@@ -201,29 +229,40 @@ export default function Dashboard() {
                         ALL CHANNELS →
                     </Link>
                 </div>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                    {CAMERAS.slice(0, 4).map((cam) => (
-                        <Link key={cam.id} to="/feeds" data-testid={`mini-cam-${cam.code.toLowerCase()}`} className="group relative aspect-video overflow-hidden rounded-lg border border-white/5 scanlines">
-                            <img
-                                src={cam.img}
-                                alt={cam.label}
-                                className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                style={{ filter: 'grayscale(45%) contrast(1.12) brightness(0.78) saturate(0.75)' }}
-                            />
-                            <div className="absolute inset-0 bg-sky-900/20 mix-blend-overlay" />
-                            <span className="absolute left-2 top-2 flex items-center gap-1.5 mono text-[9px] tracking-widest text-red-400">
-                                <span className="h-1.5 w-1.5 rounded-full bg-red-500 rec-blink" /> REC
-                            </span>
-                            <span className="absolute bottom-2 left-2 mono text-[9px] tracking-widest text-sky-200/90">{cam.code}</span>
-                        </Link>
-                    ))}
-                </div>
+                {previewCams.length === 0 ? (
+                    <Link
+                        to="/feeds"
+                        data-testid="empty-cams-cta"
+                        className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-sky-500/25 py-12 transition-colors duration-200 hover:border-[#ea7f2b]/50 hover:bg-[#ea7f2b]/5"
+                    >
+                        <Cctv size={26} className="text-sky-500/60" />
+                        <p className="mono text-[10px] tracking-[0.25em] text-slate-500">NO CAMERAS REGISTERED · ADD YOUR NVR CHANNELS</p>
+                    </Link>
+                ) : (
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        {previewCams.map((cam) => (
+                            <Link key={cam.id} to="/feeds" data-testid={`mini-cam-${cam.code?.toLowerCase()}`} className="group relative aspect-video overflow-hidden rounded-lg border border-white/5 scanlines">
+                                <img
+                                    src={cam.img}
+                                    alt={cam.label}
+                                    className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                    style={{ filter: 'grayscale(45%) contrast(1.12) brightness(0.78) saturate(0.75)' }}
+                                />
+                                <div className="absolute inset-0 bg-sky-900/20 mix-blend-overlay" />
+                                <span className="absolute left-2 top-2 flex items-center gap-1.5 mono text-[9px] tracking-widest text-red-400">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-red-500 rec-blink" /> REC
+                                </span>
+                                <span className="absolute bottom-2 left-2 mono text-[9px] tracking-widest text-sky-200/90">{cam.code}</span>
+                            </Link>
+                        ))}
+                    </div>
+                )}
             </motion.section>
 
             {/* MARQUEE */}
             <div className="overflow-hidden rounded-xl border border-[#ea7f2b]/15 bg-[#070c18]/80 py-3">
                 <div className="marquee-track">
-                    {[...MARQUEE_ITEMS, ...MARQUEE_ITEMS].map((item, i) => (
+                    {[...marqueeItems, ...marqueeItems].map((item, i) => (
                         <span key={i} className="flex items-center mono text-[10px] tracking-[0.3em] text-slate-500">
                             <span className="px-6">{item}</span>
                             <span className="h-1 w-1 rounded-full bg-[#ea7f2b]/60" />

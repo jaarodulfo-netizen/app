@@ -251,6 +251,113 @@ async def officer_sessions(officer_id: str, user=Depends(require_commander)):
     ]
 
 
+def doc_id(d):
+    d["id"] = str(d.pop("_id"))
+    return d
+
+
+class EmployeeIn(BaseModel):
+    name: str
+    role: str = ""
+    cardNo: str = ""
+    faceSync: bool = False
+    faceMatch: str | None = None
+    level: str = "L1 · GENERAL"
+
+
+class CameraIn(BaseModel):
+    label: str
+    location: str = ""
+    nvr: str = ""
+    img: str | None = None
+
+
+class DeviceIn(BaseModel):
+    type: str
+    name: str
+    ip: str = ""
+    fw: str = ""
+    detail: str = ""
+    signal: int = 95
+
+
+@api_router.get("/employees")
+async def list_employees(user=Depends(get_current_user)):
+    docs = await db.employees.find().sort("created_at", -1).to_list(500)
+    return [doc_id(d) for d in docs]
+
+
+@api_router.post("/employees")
+async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
+    doc = body.model_dump()
+    doc["created_at"] = datetime.now(timezone.utc)
+    doc["created_by"] = user["email"]
+    r = await db.employees.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return doc_id(doc)
+
+
+@api_router.delete("/employees/{item_id}")
+async def delete_employee(item_id: str, user=Depends(get_current_user)):
+    r = await db.employees.delete_one({"_id": ObjectId(item_id)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return {"ok": True}
+
+
+@api_router.get("/cameras")
+async def list_cameras(user=Depends(get_current_user)):
+    docs = await db.cameras.find().sort("created_at", 1).to_list(500)
+    return [doc_id(d) for d in docs]
+
+
+@api_router.post("/cameras")
+async def create_camera(body: CameraIn, user=Depends(get_current_user)):
+    count = await db.cameras.count_documents({})
+    doc = body.model_dump()
+    doc["code"] = f"CAM-{count + 1:02d}"
+    doc["status"] = "live"
+    doc["created_at"] = datetime.now(timezone.utc)
+    r = await db.cameras.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return doc_id(doc)
+
+
+@api_router.delete("/cameras/{item_id}")
+async def delete_camera(item_id: str, user=Depends(get_current_user)):
+    r = await db.cameras.delete_one({"_id": ObjectId(item_id)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    return {"ok": True}
+
+
+@api_router.get("/devices")
+async def list_devices(user=Depends(get_current_user)):
+    docs = await db.devices.find().sort("created_at", 1).to_list(500)
+    return [doc_id(d) for d in docs]
+
+
+@api_router.post("/devices")
+async def create_device(body: DeviceIn, user=Depends(get_current_user)):
+    if body.type not in {"gateway", "nvr", "face", "card"}:
+        raise HTTPException(status_code=400, detail="Device type must be gateway, nvr, face or card")
+    doc = body.model_dump()
+    doc["status"] = "online"
+    doc["created_at"] = datetime.now(timezone.utc)
+    r = await db.devices.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return doc_id(doc)
+
+
+@api_router.delete("/devices/{item_id}")
+async def delete_device(item_id: str, user=Depends(get_current_user)):
+    r = await db.devices.delete_one({"_id": ObjectId(item_id)})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Device not found")
+    await db.cameras.update_many({"nvr": item_id}, {"$set": {"nvr": ""}})
+    return {"ok": True}
+
+
 @api_router.post("/status", response_model=StatusCheck)
 async def create_status_check(input: StatusCheckCreate):
     status_obj = StatusCheck(**input.model_dump())
