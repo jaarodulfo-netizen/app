@@ -112,7 +112,7 @@ export default function Events() {
                         ))}
                     </select>
                     <div className="flex gap-2">
-                        {['all', 'granted', 'denied'].map((r) => (
+                        {['all', 'granted', 'denied', 'status', 'alarm'].map((r) => (
                             <button key={r} data-testid={`filter-result-${r}`} onClick={() => setResult(r)} className={chip(result === r)}>
                                 {r.toUpperCase()}
                             </button>
@@ -171,7 +171,11 @@ export default function Events() {
                                             className={`mono text-[10px] tracking-widest px-2.5 py-1 rounded border ${
                                                 e.result === 'granted'
                                                     ? 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10'
-                                                    : 'text-red-300 border-red-400/30 bg-red-400/10'
+                                                    : e.result === 'denied'
+                                                        ? 'text-red-300 border-red-400/30 bg-red-400/10'
+                                                        : e.result === 'alarm'
+                                                            ? 'text-orange-300 border-orange-400/30 bg-orange-400/10'
+                                                            : 'text-sky-300 border-sky-400/30 bg-sky-400/10'
                                             }`}
                                         >
                                             {e.result.toUpperCase()}
