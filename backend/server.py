@@ -567,6 +567,23 @@ async def normalize_event(raw: dict) -> dict:
 
 def event_out(d: dict) -> dict:
     t = d.get("time")
+    detail = str(d.get("detail") or "").strip()
+    display_labels = {
+        "exit button pressed": "BUTTON PRESSED",
+        "exit button released": "BUTTON RELEASED",
+        "lock released": "LOCK RELEASED",
+        "lock closed": "LOCK CLOSED",
+        "door opened normally": "DOOR OPENED",
+        "door closed normally": "DOOR CLOSED",
+        "always-open state started": "ALWAYS OPEN STARTED",
+        "always-open state ended": "ALWAYS OPEN ENDED",
+    }
+    detail = display_labels.get(detail.lower(), detail)
+
+    result = str(d.get("result") or "status").lower()
+    if detail in {"BUTTON PRESSED", "BUTTON RELEASED", "LOCK RELEASED", "LOCK CLOSED", "DOOR OPENED", "DOOR CLOSED", "ALWAYS OPEN STARTED", "ALWAYS OPEN ENDED"}:
+        result = "status"
+
     return {
         "id": str(d["_id"]),
         "ts": int(t.timestamp() * 1000) if isinstance(t, datetime) else int(datetime.now(timezone.utc).timestamp() * 1000),
@@ -575,8 +592,8 @@ def event_out(d: dict) -> dict:
         "doorCode": d.get("doorCode"),
         "zone": d.get("zone", ""),
         "method": d.get("method", "CARD"),
-        "result": d.get("result", "granted"),
-        "detail": d.get("detail", ""),
+        "result": result,
+        "detail": detail,
         "cardNo": d.get("cardNo"),
         "source_device": d.get("source_device"),
         "source_device_id": d.get("source_device_id"),
