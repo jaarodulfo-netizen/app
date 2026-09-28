@@ -57,7 +57,7 @@ export function SecurityProvider({ children }) {
         fetchEvents();
         const t = setInterval(() => {
             if (liveRef.current) fetchEvents();
-        }, 4000);
+        }, 1500);
         return () => clearInterval(t);
     }, [fetchEvents]);
 
