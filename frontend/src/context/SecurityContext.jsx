@@ -171,6 +171,12 @@ export function SecurityProvider({ children }) {
         return data;
     }, []);
 
+    const placeDoor = useCallback(async (id, placement) => {
+        const { data } = await api.put(`/doors/${id}/placement`, placement);
+        setDoors((prev) => prev.map((d) => (d.id === id ? data : d)));
+        return data;
+    }, []);
+
     const deleteDoor = useCallback(async (id) => {
         await api.delete(`/doors/${id}`);
         setDoors((prev) => prev.filter((d) => d.id !== id));
@@ -198,6 +204,7 @@ export function SecurityProvider({ children }) {
                 deleteDevice,
                 addDoor,
                 updateDoor,
+                placeDoor,
                 deleteDoor,
             }}
         >
