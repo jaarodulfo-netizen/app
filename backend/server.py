@@ -24,7 +24,8 @@ import asyncio
 import hashlib
 import hmac
 import shutil
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, time
+from zoneinfo import ZoneInfo
 
 try:
     import imageio_ffmpeg
@@ -157,6 +158,10 @@ class DoorUpdate(BaseModel):
     x: Optional[float] = None
     y: Optional[float] = None
     camId: Optional[str] = None
+
+
+class AttendanceConfigIn(BaseModel):
+    device_id: str
 
 
 def hash_password(password: str) -> str:
@@ -494,6 +499,10 @@ async def normalize_event(raw: dict) -> dict:
     dedupe = hashlib.sha256(
         f"{ac.get('deviceSerial') or raw.get('device')}|{ac.get('serialNo') or raw.get('eventId')}|{when.isoformat()}|{person}|{door_code}".encode()
     ).hexdigest()
+    source_device = raw.get("device") or raw.get("deviceName") or ac.get("deviceName") or None
+    source_device_id = raw.get("deviceId") or raw.get("device_id") or ac.get("deviceId") or None
+    source_serial = raw.get("deviceSerial") or ac.get("deviceSerial") or raw.get("serialNumber") or None
+    source_ip = raw.get("deviceIp") or raw.get("ipAddress") or ac.get("ipAddress") or None
     return {
         "person": person,
         "cardNo": card_no,
@@ -505,6 +514,10 @@ async def normalize_event(raw: dict) -> dict:
         "detail": detail,
         "time": when,
         "dedupeKey": dedupe,
+        "source_device": source_device,
+        "source_device_id": source_device_id,
+        "source_serial": source_serial,
+        "source_ip": source_ip,
         "created_at": datetime.now(timezone.utc),
     }
 
@@ -680,6 +693,116 @@ async def hls_file(camera_id: str, file_path: str, token: str = ""):
             headers={"Cache-Control": "no-store"},
         )
     return FileResponse(p, media_type="video/mp2t", headers={"Cache-Control": "no-store"})
+
+
+# --- Attendance (one dedicated facial terminal) ---
+
+ATTENDANCE_TZ = ZoneInfo("America/Monterrey")
+
+
+def attendance_device_match(device: dict) -> list:
+    clauses = [{"source_device_id": str(device["_id"])}]
+    if device.get("name"):
+        clauses.append({"source_device": device["name"]})
+    if device.get("ip"):
+        clauses.append({"source_ip": device["ip"]})
+    if device.get("detail"):
+        clauses.append({"source_serial": device["detail"]})
+    return clauses
+
+
+@api_router.get("/attendance/config")
+async def get_attendance_config(user=Depends(get_current_user)):
+    cfg = await db.attendance_config.find_one({"_id": "primary"})
+    if not cfg:
+        return {"device_id": None, "device": None}
+    try:
+        device = await db.devices.find_one({"_id": ObjectId(cfg["device_id"])})
+    except Exception:
+        device = None
+    if not device:
+        return {"device_id": cfg.get("device_id"), "device": None}
+    return {
+        "device_id": str(device["_id"]),
+        "device": {
+            "id": str(device["_id"]),
+            "name": device.get("name"),
+            "ip": device.get("ip"),
+            "detail": device.get("detail"),
+            "status": device.get("status", "online"),
+        },
+    }
+
+
+@api_router.put("/attendance/config")
+async def set_attendance_config(body: AttendanceConfigIn, user=Depends(require_commander)):
+    try:
+        device = await db.devices.find_one({"_id": ObjectId(body.device_id)})
+    except Exception:
+        device = None
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if device.get("type") != "face":
+        raise HTTPException(status_code=400, detail="Attendance device must be a facial terminal")
+    await db.attendance_config.update_one(
+        {"_id": "primary"},
+        {"$set": {"device_id": body.device_id, "updated_at": datetime.now(timezone.utc), "updated_by": user["email"]}},
+        upsert=True,
+    )
+    return {"ok": True, "device_id": body.device_id}
+
+
+@api_router.get("/attendance")
+async def attendance_summary(date: Optional[str] = None, user=Depends(get_current_user)):
+    cfg = await db.attendance_config.find_one({"_id": "primary"})
+    if not cfg:
+        return {"date": date, "device": None, "rows": [], "summary": {"present": 0, "events": 0}}
+
+    try:
+        device = await db.devices.find_one({"_id": ObjectId(cfg["device_id"])})
+    except Exception:
+        device = None
+    if not device:
+        return {"date": date, "device": None, "rows": [], "summary": {"present": 0, "events": 0}}
+
+    try:
+        target_day = datetime.strptime(date, "%Y-%m-%d").date() if date else datetime.now(ATTENDANCE_TZ).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Date must be YYYY-MM-DD")
+
+    local_start = datetime.combine(target_day, time.min, tzinfo=ATTENDANCE_TZ)
+    local_end = local_start + timedelta(days=1)
+    start_utc = local_start.astimezone(timezone.utc)
+    end_utc = local_end.astimezone(timezone.utc)
+
+    query = {
+        "time": {"$gte": start_utc, "$lt": end_utc},
+        "result": "granted",
+        "$or": attendance_device_match(device),
+    }
+    docs = await db.events.find(query).sort("time", 1).to_list(5000)
+
+    grouped = {}
+    for e in docs:
+        person = e.get("person") or "UNKNOWN"
+        row = grouped.setdefault(person, {"person": person, "events": 0, "first_in": None, "last_out": None})
+        row["events"] += 1
+        t = e.get("time")
+        if isinstance(t, datetime):
+            if t.tzinfo is None:
+                t = t.replace(tzinfo=timezone.utc)
+            local_t = t.astimezone(ATTENDANCE_TZ)
+            if row["first_in"] is None:
+                row["first_in"] = local_t.isoformat()
+            row["last_out"] = local_t.isoformat()
+
+    rows = sorted(grouped.values(), key=lambda r: (r["first_in"] or "", r["person"]))
+    return {
+        "date": target_day.isoformat(),
+        "device": {"id": str(device["_id"]), "name": device.get("name"), "ip": device.get("ip")},
+        "rows": rows,
+        "summary": {"present": len(rows), "events": len(docs)},
+    }
 
 
 # --- File upload (employee photos) ---
