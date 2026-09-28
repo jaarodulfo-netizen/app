@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save } from 'lucide-react';
+import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save, Search, Filter } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -430,6 +430,28 @@ export default function Employees() {
     const { employees, deleteEmployee } = useSecurity();
     const [open, setOpen] = useState(false);
     const [editing, setEditing] = useState(null);
+    const [query, setQuery] = useState('');
+    const [faceFilter, setFaceFilter] = useState('all');
+    const [levelFilter, setLevelFilter] = useState('all');
+
+    const filteredEmployees = (employees || []).filter((emp) => {
+        const cards = emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : []);
+        const haystack = [
+            emp.name,
+            emp.personId,
+            emp.role,
+            emp.level,
+            ...cards,
+        ].filter(Boolean).join(' ').toLowerCase();
+
+        const matchesQuery = !query.trim() || haystack.includes(query.trim().toLowerCase());
+        const matchesFace =
+            faceFilter === 'all' ||
+            (faceFilter === 'synced' && emp.faceSync) ||
+            (faceFilter === 'pending' && !emp.faceSync);
+        const matchesLevel = levelFilter === 'all' || emp.level === levelFilter;
+        return matchesQuery && matchesFace && matchesLevel;
+    });
 
     const remove = async (emp) => {
         try {
@@ -453,6 +475,47 @@ export default function Employees() {
                 </button>
             </PageHeader>
 
+            <div className="aegis-panel rounded-xl p-4 sm:p-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+                    <div className="flex flex-1 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5">
+                        <Search size={15} className="text-slate-500" />
+                        <input
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            placeholder="Search name, Person ID, card number, role…"
+                            className="w-full bg-transparent text-sm text-slate-200 placeholder:text-slate-600 focus:outline-none"
+                            data-testid="employee-search-input"
+                        />
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <select
+                            value={faceFilter}
+                            onChange={(e) => setFaceFilter(e.target.value)}
+                            className="rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-400/60"
+                        >
+                            <option value="all">ALL FACE STATUS</option>
+                            <option value="synced">FACE SYNCED</option>
+                            <option value="pending">FACE PENDING</option>
+                        </select>
+                        <select
+                            value={levelFilter}
+                            onChange={(e) => setLevelFilter(e.target.value)}
+                            className="rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-400/60"
+                        >
+                            <option value="all">ALL LEVELS</option>
+                            <option>L1 · GENERAL</option>
+                            <option>L2 · STAFF</option>
+                            <option>L3 · RESTRICTED</option>
+                            <option>L4 · COMMAND</option>
+                        </select>
+                    </div>
+                </div>
+                <div className="mt-3 flex items-center gap-2 mono text-[10px] tracking-widest text-slate-600">
+                    <Filter size={12} />
+                    SHOWING {filteredEmployees.length} OF {employees?.length || 0} PEOPLE
+                </div>
+            </div>
+
             {employees === null ? (
                 <p className="mono text-xs tracking-widest text-slate-600 py-16 text-center">LOADING REGISTRY…</p>
             ) : employees.length === 0 ? (
@@ -465,70 +528,101 @@ export default function Employees() {
                     <p className="mono text-[10px] tracking-[0.25em] text-slate-500">REGISTRY EMPTY · ENROLL YOUR FIRST EMPLOYEE</p>
                 </button>
             ) : (
-                <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-5">
-                    {employees.map((emp, i) => (
-                        <motion.div
-                            key={emp.id}
-                            data-testid={`employee-card-${emp.id}`}
-                            initial={{ opacity: 0, y: 22 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: Math.min(i * 0.06, 0.5), duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
-                            className="aegis-panel rounded-xl p-5 transition-colors duration-300 hover:border-sky-400/40"
-                        >
-                            <div className="flex items-start gap-4">
-                                <Avatar emp={emp} />
-                                <div className="min-w-0 flex-1">
-                                    <p className="font-head font-bold text-slate-100 tracking-wide truncate">{emp.name}</p>
-                                    <p className="text-xs text-slate-500 mt-0.5 truncate">{emp.role}</p>
-                                    <span className="inline-block mt-2 mono text-[9px] tracking-widest text-sky-300 border border-sky-500/25 bg-sky-500/5 rounded px-2 py-0.5">
-                                        {emp.level}
-                                    </span>
-                                </div>
-                            </div>
-
-                            <div className="mt-4 flex items-center gap-2">
-                                <div className="flex flex-wrap gap-1.5">
-                                    {(emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : [])).map((card) => (
-                                        <span key={card} className="mono text-xs text-slate-300 bg-white/[0.04] border border-white/5 rounded px-2.5 py-1.5">{card}</span>
-                                    ))}
-                                    {!emp.cardNo && !emp.cardNos?.length && <span className="mono text-xs text-slate-600">NO CARD</span>}
-                                </div>
-                                <button
-                                    data-testid={`copy-card-${emp.id}`}
-                                    onClick={() => {
-                                        try { navigator.clipboard.writeText(emp.cardNo); } catch (e) { /* noop */ }
-                                        toast.info('CARD NUMBER COPIED', { description: emp.cardNo });
-                                    }}
-                                    className="rounded-md border border-white/10 p-1.5 text-slate-400 transition-colors duration-200 hover:text-sky-300 hover:border-sky-400/40"
-                                >
-                                    <Copy size={12} />
-                                </button>
-                                <span
-                                    className={`ml-auto mono text-[9px] tracking-widest rounded border px-2 py-1 ${
-                                        emp.faceSync
-                                            ? 'text-emerald-300 border-emerald-400/30 bg-emerald-400/10'
-                                            : 'text-orange-300 border-orange-400/30 bg-orange-400/10'
-                                    }`}
-                                >
-                                    {emp.faceSync ? `FACE SYNCED · ${emp.faceMatch}%` : 'FACE PENDING'}
-                                </span>
-                            </div>
-
-                            <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
-                                <p className="mono text-[9px] tracking-wider text-slate-600">ENROLLED {emp.created_at ? new Date(emp.created_at).toLocaleDateString() : ''}</p>
-                                <div className="flex items-center gap-2">
-                                    <button
-                                        data-testid={`edit-employee-${emp.id}`}
-                                        onClick={() => setEditing(emp)}
-                                        className="flex items-center gap-1.5 rounded-md border border-sky-500/25 px-2.5 py-1.5 mono text-[9px] tracking-widest text-sky-300 hover:bg-sky-500/10"
-                                    >
-                                        <Pencil size={12} /> EDIT
-                                    </button>
-                                    <DeleteButton testid={`delete-employee-${emp.id}`} onConfirm={() => remove(emp)} />
-                                </div>
-                            </div>
-                        </motion.div>
-                    ))}
+                <div className="overflow-hidden rounded-xl border border-sky-500/15 bg-[#09101d]/90">
+                    <div className="overflow-x-auto">
+                        <table className="w-full min-w-[1100px] text-left">
+                            <thead className="border-b border-white/5 bg-white/[0.02]">
+                                <tr className="mono text-[9px] tracking-widest text-slate-600">
+                                    <th className="px-4 py-3 font-medium">PERSON</th>
+                                    <th className="px-4 py-3 font-medium">PERSON ID</th>
+                                    <th className="px-4 py-3 font-medium">CARD NO.</th>
+                                    <th className="px-4 py-3 font-medium">ROLE</th>
+                                    <th className="px-4 py-3 font-medium">LEVEL</th>
+                                    <th className="px-4 py-3 font-medium">FACE</th>
+                                    <th className="px-4 py-3 font-medium text-right">ACTIONS</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {filteredEmployees.map((emp, i) => {
+                                    const cards = emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : []);
+                                    return (
+                                        <motion.tr
+                                            key={emp.id}
+                                            initial={{ opacity: 0 }}
+                                            animate={{ opacity: 1 }}
+                                            transition={{ delay: Math.min(i * 0.015, 0.25) }}
+                                            className="border-b border-white/[0.04] last:border-0 hover:bg-white/[0.025]"
+                                        >
+                                            <td className="px-4 py-3.5">
+                                                <div className="flex items-center gap-3">
+                                                    <Avatar emp={emp} size="h-10 w-10" />
+                                                    <div className="min-w-0">
+                                                        <p className="truncate text-sm font-semibold text-slate-200">{emp.name}</p>
+                                                        <p className="mono mt-0.5 text-[9px] tracking-wider text-slate-600">
+                                                            {emp.source === 'iVMS-4200' ? 'IMPORTED FROM IVMS' : 'KERMA V2'}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3.5 mono text-xs text-slate-400">{emp.personId || '—'}</td>
+                                            <td className="px-4 py-3.5">
+                                                <div className="flex flex-wrap gap-1.5 max-w-[280px]">
+                                                    {cards.length ? cards.map((card) => (
+                                                        <span key={card} className="mono rounded border border-white/5 bg-white/[0.04] px-2 py-1 text-[11px] text-sky-200">{card}</span>
+                                                    )) : <span className="mono text-[10px] text-slate-600">NO CARD</span>}
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3.5 text-xs text-slate-400">{emp.role || '—'}</td>
+                                            <td className="px-4 py-3.5">
+                                                <span className="mono rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1 text-[9px] tracking-wider text-sky-300">{emp.level || '—'}</span>
+                                            </td>
+                                            <td className="px-4 py-3.5">
+                                                <span className={`mono rounded border px-2 py-1 text-[9px] tracking-wider ${
+                                                    emp.faceSync
+                                                        ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                                                        : 'border-orange-400/30 bg-orange-400/10 text-orange-300'
+                                                }`}>
+                                                    {emp.faceSync ? 'SYNCED' : 'PENDING'}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3.5">
+                                                <div className="flex justify-end gap-2">
+                                                    {cards.length > 0 && (
+                                                        <button
+                                                            onClick={() => {
+                                                                const value = cards.join(', ');
+                                                                try { navigator.clipboard.writeText(value); } catch (e) { /* noop */ }
+                                                                toast.info('CARD NUMBER COPIED', { description: value });
+                                                            }}
+                                                            className="rounded-md border border-white/10 p-2 text-slate-500 hover:border-sky-400/40 hover:text-sky-300"
+                                                            title="Copy card number"
+                                                        >
+                                                            <Copy size={13} />
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        data-testid={`edit-employee-${emp.id}`}
+                                                        onClick={() => setEditing(emp)}
+                                                        className="flex items-center gap-1.5 rounded-md border border-sky-500/25 px-3 py-2 mono text-[9px] tracking-widest text-sky-300 hover:bg-sky-500/10"
+                                                    >
+                                                        <Pencil size={12} /> EDIT
+                                                    </button>
+                                                    <DeleteButton testid={`delete-employee-${emp.id}`} onConfirm={() => remove(emp)} />
+                                                </div>
+                                            </td>
+                                        </motion.tr>
+                                    );
+                                })}
+                                {filteredEmployees.length === 0 && (
+                                    <tr>
+                                        <td colSpan="7" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
+                                            NO ENROLLMENTS MATCH THE CURRENT FILTERS
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             )}
 
