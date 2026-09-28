@@ -867,9 +867,24 @@ async def gateway_event_doc(event: dict) -> dict:
     gateway_device_id = event.get("deviceId")
     device_name = event.get("deviceName") or gateway_device_id or "UNKNOWN DEVICE"
     door_no = event.get("doorNo")
-    outcome = str(event.get("outcome") or "granted").lower()
-    result = "granted" if outcome == "granted" else "denied"
-    detail = event.get("description") or ("ACCESS GRANTED" if result == "granted" else "ACCESS DENIED")
+    outcome = str(event.get("outcome") or "status").lower().strip()
+    if outcome not in {"granted", "denied", "alarm", "status"}:
+        desc = str(event.get("description") or "").lower()
+        if any(x in desc for x in ("access granted", "authentication successful", "valid card")):
+            outcome = "granted"
+        elif any(x in desc for x in ("access denied", "authentication failed", "not authorized", "expired card", "card not found")):
+            outcome = "denied"
+        elif "alarm" in desc or "abnormal" in desc:
+            outcome = "alarm"
+        else:
+            outcome = "status"
+    result = outcome
+    detail = event.get("description") or {
+        "granted": "ACCESS GRANTED",
+        "denied": "ACCESS DENIED",
+        "alarm": "ALARM",
+        "status": "STATUS EVENT",
+    }[result]
     dedupe = hashlib.sha256(
         f"gateway|{gateway_device_id}|{event.get('id')}|{when.isoformat()}|{event.get('cardNo')}|{door_no}".encode()
     ).hexdigest()
