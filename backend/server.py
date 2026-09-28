@@ -19,6 +19,7 @@ import uuid
 import secrets
 import bcrypt
 import jwt
+import re
 import requests
 import asyncio
 import hashlib
