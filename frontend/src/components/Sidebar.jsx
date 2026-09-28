@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Map, Video, Users, Cpu, Activity, Radio, ShieldCheck } from 'lucide-react';
+import { LayoutDashboard, Map, Video, Users, Cpu, Activity, Radio, ShieldCheck, Clock3 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const NAV = [
@@ -9,6 +9,7 @@ const NAV = [
     { to: '/employees', label: 'Enrollment', icon: Users, testid: 'nav-employees' },
     { to: '/devices', label: 'Access Devices', icon: Cpu, testid: 'nav-devices' },
     { to: '/events', label: 'Events Log', icon: Activity, testid: 'nav-events' },
+    { to: '/attendance', label: 'Attendance', icon: Clock3, testid: 'nav-attendance' },
     { to: '/officers', label: 'Officers', icon: ShieldCheck, testid: 'nav-officers', commanderOnly: true },
 ];
 
