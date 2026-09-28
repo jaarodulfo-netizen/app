@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus } from 'lucide-react';
+import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -282,9 +282,154 @@ function EnrollModal({ open, onClose }) {
     );
 }
 
+
+function EditEmployeeModal({ employee, onClose }) {
+    const { updateEmployee } = useSecurity();
+    const [name, setName] = useState(employee?.name || '');
+    const [role, setRole] = useState(employee?.role || '');
+    const [level, setLevel] = useState(employee?.level || 'L1 · GENERAL');
+    const initialCards = employee?.cardNos?.length ? employee.cardNos : (employee?.cardNo ? [employee.cardNo] : []);
+    const [cardsText, setCardsText] = useState(initialCards.join(', '));
+    const [photo, setPhoto] = useState(null);
+    const [photoPreview, setPhotoPreview] = useState(employee?.photoPath ? fileUrl(employee.photoPath) : null);
+    const [saving, setSaving] = useState(false);
+    const fileRef = useRef(null);
+
+    const pickPhoto = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        setPhoto(file);
+        setPhotoPreview(URL.createObjectURL(file));
+    };
+
+    const parsedCards = cardsText
+        .split(/[\s,;]+/)
+        .map((v) => v.trim())
+        .filter(Boolean);
+
+    const cardsValid = parsedCards.every((v) => /^\d{10}$/.test(v));
+
+    const submit = async () => {
+        if (!name.trim()) return;
+        if (!cardsValid) {
+            toast.error('INVALID CARD FORMAT', { description: 'Every card must contain exactly 10 digits.' });
+            return;
+        }
+        setSaving(true);
+        try {
+            let photoPath = employee?.photoPath || null;
+            if (photo) {
+                const fd = new FormData();
+                fd.append('file', photo);
+                const { data } = await api.post('/upload/photo', fd);
+                photoPath = data.path;
+            }
+            await updateEmployee(employee.id, {
+                name: name.trim(),
+                role: role.trim() || 'Staff Member',
+                level,
+                cardNos: parsedCards,
+                cardNo: parsedCards[0] || '',
+                photoPath,
+            });
+            toast.success('EMPLOYEE UPDATED', { description: `${name} saved successfully` });
+            onClose();
+        } catch (e) {
+            toast.error('UPDATE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    if (!employee) return null;
+
+    return (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
+            <motion.div
+                initial={{ opacity: 0, y: 24, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 24 }}
+                className="relative w-full max-w-xl rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8"
+            >
+                <div className="flex items-start justify-between">
+                    <div>
+                        <p className="mono text-[10px] tracking-[0.35em] text-sky-400">EDIT CREDENTIAL PROFILE</p>
+                        <h2 className="font-display text-xl font-bold text-white mt-2">{employee.name}</h2>
+                        {employee.personId && <p className="mono text-[9px] tracking-widest text-slate-600 mt-1">PERSON ID · {employee.personId}</p>}
+                    </div>
+                    <button onClick={onClose} className="rounded-full border border-white/10 p-2 text-slate-400 hover:bg-white/10 hover:text-white">
+                        <X size={15} />
+                    </button>
+                </div>
+
+                <div className="mt-6 space-y-4">
+                    <div className="flex items-center gap-4">
+                        <button onClick={() => fileRef.current?.click()} className="h-24 w-24 shrink-0 overflow-hidden rounded-xl border border-dashed border-sky-500/40 bg-white/[0.03]">
+                            {photoPreview ? <img src={photoPreview} alt="Employee" className="h-full w-full object-cover" /> : <ImagePlus size={22} className="m-auto text-sky-400" />}
+                        </button>
+                        <div>
+                            <p className="mono text-[10px] tracking-widest text-slate-500">EMPLOYEE PHOTO</p>
+                            <p className="mt-1 text-xs text-slate-500">Click the box to add or replace the image.</p>
+                        </div>
+                        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
+                    </div>
+
+                    <div>
+                        <label className="mono text-[10px] tracking-widest text-slate-500">FULL NAME</label>
+                        <input value={name} onChange={(e) => setName(e.target.value)}
+                            className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60" />
+                    </div>
+
+                    <div>
+                        <label className="mono text-[10px] tracking-widest text-slate-500">ROLE</label>
+                        <input value={role} onChange={(e) => setRole(e.target.value)}
+                            className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60" />
+                    </div>
+
+                    <div>
+                        <label className="mono text-[10px] tracking-widest text-slate-500">ACCESS LEVEL</label>
+                        <select value={level} onChange={(e) => setLevel(e.target.value)}
+                            className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60">
+                            <option>L1 · GENERAL</option>
+                            <option>L2 · STAFF</option>
+                            <option>L3 · RESTRICTED</option>
+                            <option>L4 · COMMAND</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className="mono text-[10px] tracking-widest text-slate-500">CARD NUMBERS · 10 DIGITS EACH</label>
+                        <textarea
+                            value={cardsText}
+                            onChange={(e) => setCardsText(e.target.value.replace(/[^0-9,;\s]/g, ''))}
+                            rows={3}
+                            placeholder="0008512197, 0008512175"
+                            className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 mono text-sm text-sky-200 focus:outline-none focus:border-sky-400/60"
+                        />
+                        <p className={`mt-1 mono text-[9px] tracking-wider ${cardsValid ? 'text-slate-600' : 'text-red-400'}`}>
+                            Separate multiple cards with commas.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-5">
+                    <button onClick={onClose} className="rounded-full border border-white/10 px-5 py-2.5 mono text-[10px] tracking-widest text-slate-400 hover:text-white">CANCEL</button>
+                    <button onClick={submit} disabled={saving || !cardsValid || !name.trim()}
+                        className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
+                        {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+                        {saving ? 'SAVING…' : 'SAVE CHANGES'}
+                    </button>
+                </div>
+            </motion.div>
+        </motion.div>
+    );
+}
+
 export default function Employees() {
     const { employees, deleteEmployee } = useSecurity();
     const [open, setOpen] = useState(false);
+    const [editing, setEditing] = useState(null);
 
     const remove = async (emp) => {
         try {
@@ -371,7 +516,16 @@ export default function Employees() {
 
                             <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
                                 <p className="mono text-[9px] tracking-wider text-slate-600">ENROLLED {emp.created_at ? new Date(emp.created_at).toLocaleDateString() : ''}</p>
-                                <DeleteButton testid={`delete-employee-${emp.id}`} onConfirm={() => remove(emp)} />
+                                <div className="flex items-center gap-2">
+                                    <button
+                                        data-testid={`edit-employee-${emp.id}`}
+                                        onClick={() => setEditing(emp)}
+                                        className="flex items-center gap-1.5 rounded-md border border-sky-500/25 px-2.5 py-1.5 mono text-[9px] tracking-widest text-sky-300 hover:bg-sky-500/10"
+                                    >
+                                        <Pencil size={12} /> EDIT
+                                    </button>
+                                    <DeleteButton testid={`delete-employee-${emp.id}`} onConfirm={() => remove(emp)} />
+                                </div>
                             </div>
                         </motion.div>
                     ))}
@@ -379,6 +533,9 @@ export default function Employees() {
             )}
 
             <EnrollModal open={open} onClose={() => setOpen(false)} />
+            <AnimatePresence>
+                {editing && <EditEmployeeModal employee={editing} onClose={() => setEditing(null)} />}
+            </AnimatePresence>
         </div>
     );
 }
