@@ -20,7 +20,22 @@ import secrets
 import bcrypt
 import jwt
 import requests
+import asyncio
+import hashlib
+import hmac
+import shutil
 from datetime import datetime, timezone, timedelta
+
+try:
+    import imageio_ffmpeg
+
+    FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    FFMPEG_BIN = os.environ.get("FFMPEG_BIN", "ffmpeg")
+
+HLS_ROOT = Path("/tmp/kerma-hls")
+stream_procs: dict = {}
+stream_status: dict = {}
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -428,6 +443,259 @@ async def create_officer(body: OfficerCreate, user=Depends(require_commander)):
     return {"email": email, "name": name, "role": "officer", "temp_password": temp_password}
 
 
+# --- Hikvision event ingestion (gateway key, not user JWT) ---
+
+def gateway_auth(request: Request):
+    key = request.headers.get("X-API-Key", "")
+    if not key or not hmac.compare_digest(key.encode(), os.environ["GATEWAY_API_KEY"].encode()):
+        raise HTTPException(status_code=401, detail="Invalid gateway key")
+
+
+def parse_time(v):
+    try:
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except Exception:
+        return datetime.now(timezone.utc)
+
+
+async def normalize_event(raw: dict) -> dict:
+    ac = raw.get("AccessControllerEvent", raw)
+    card_no = ac.get("cardNo") or ac.get("card") or None
+    person = raw.get("person") or ac.get("employeeNoString") or ac.get("employeeNo") or ac.get("employeeID") or None
+    if card_no and not raw.get("person"):
+        emp = await db.employees.find_one({"cardNo": card_no})
+        if emp:
+            person = emp["name"]
+    person = person or ("CARD " + card_no if card_no else "UNKNOWN CREDENTIAL")
+
+    mode = str(ac.get("currentVerifyMode") or ac.get("verifyMode") or raw.get("method") or "").lower()
+    if "face" in mode:
+        method = "FACE"
+    elif "card" in mode or card_no:
+        method = "CARD"
+    else:
+        method = (raw.get("method") or "OTHER").upper()
+
+    door_code = raw.get("doorCode")
+    door_name = raw.get("door")
+    zone = raw.get("zone", "")
+    door_no = ac.get("doorNo")
+    if not door_code and door_no is not None:
+        try:
+            door_code = f"D-{int(door_no):02d}"
+        except (ValueError, TypeError):
+            door_code = str(door_no)
+    if door_code and not door_name:
+        door_doc = await db.doors.find_one({"code": door_code})
+        if door_doc:
+            door_name = door_doc["name"]
+            zone = zone or door_doc.get("zone", "")
+    door_name = door_name or door_code or "UNKNOWN DOOR"
+    door_code = door_code or "—"
+
+    explicit = raw.get("result")
+    if explicit:
+        granted = str(explicit).lower() == "granted"
+    else:
+        state = str(ac.get("eventState") or ac.get("status") or ac.get("attendanceStatus") or "").lower()
+        granted = ac.get("success")
+        if granted is None:
+            granted = not any(x in state for x in ("fail", "deny", "invalid"))
+        granted = bool(granted)
+
+    when = parse_time(ac.get("dateTime") or ac.get("time") or raw.get("time"))
+    detail = raw.get("detail") or ("ACCESS GRANTED" if granted else f"ACCESS DENIED · CODE {ac.get('eventCode') or ac.get('minor') or '—'}")
+    dedupe = hashlib.sha256(
+        f"{ac.get('deviceSerial') or raw.get('device')}|{ac.get('serialNo') or raw.get('eventId')}|{when.isoformat()}|{person}|{door_code}".encode()
+    ).hexdigest()
+    return {
+        "person": person,
+        "cardNo": card_no,
+        "door": door_name,
+        "doorCode": door_code,
+        "zone": zone,
+        "method": method,
+        "result": "granted" if granted else "denied",
+        "detail": detail,
+        "time": when,
+        "dedupeKey": dedupe,
+        "created_at": datetime.now(timezone.utc),
+    }
+
+
+def event_out(d: dict) -> dict:
+    t = d.get("time")
+    return {
+        "id": str(d["_id"]),
+        "ts": int(t.timestamp() * 1000) if isinstance(t, datetime) else int(datetime.now(timezone.utc).timestamp() * 1000),
+        "person": d.get("person"),
+        "door": d.get("door"),
+        "doorCode": d.get("doorCode"),
+        "zone": d.get("zone", ""),
+        "method": d.get("method", "CARD"),
+        "result": d.get("result", "granted"),
+        "detail": d.get("detail", ""),
+    }
+
+
+@api_router.post("/ingest/hikvision")
+async def ingest_hikvision(request: Request):
+    gateway_auth(request)
+    body = await request.json()
+    rows = body.get("InfoList") or body.get("AcsEvent", {}).get("InfoList") or body.get("events")
+    rows = rows or [body]
+    inserted = 0
+    for raw in rows:
+        doc = await normalize_event(raw)
+        try:
+            await db.events.insert_one(doc)
+            inserted += 1
+        except Exception as e:
+            if "duplicate key" not in str(e):
+                raise
+    return {"received": len(rows), "inserted": inserted}
+
+
+@api_router.get("/events")
+async def list_events(limit: int = 200, user=Depends(get_current_user)):
+    docs = await db.events.find({}, {"raw": 0}).sort("time", -1).to_list(min(limit, 500))
+    return [event_out(d) for d in docs]
+
+
+class OfficerEventIn(BaseModel):
+    person: str
+    door: str
+    doorCode: str = "—"
+    zone: str = ""
+    method: str = "REMOTE"
+    result: str = "granted"
+    detail: str = ""
+
+
+@api_router.post("/events")
+async def create_officer_event(body: OfficerEventIn, user=Depends(get_current_user)):
+    now = datetime.now(timezone.utc)
+    doc = body.model_dump()
+    doc["time"] = now
+    doc["dedupeKey"] = hashlib.sha256(f"officer|{user['email']}|{now.isoformat()}|{body.door}".encode()).hexdigest()
+    doc["created_at"] = now
+    r = await db.events.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return event_out(doc)
+
+
+# --- RTSP → HLS live streaming ---
+
+def make_stream_token(camera_id: str, exp: int) -> str:
+    msg = f"{camera_id}.{exp}"
+    sig = hmac.new(os.environ["STREAM_SIGNING_KEY"].encode(), msg.encode(), hashlib.sha256).hexdigest()
+    return f"{msg}.{sig}"
+
+
+def check_stream_token(camera_id: str, token: str) -> bool:
+    try:
+        cid, exp, sig = token.split(".")
+        msg = f"{cid}.{exp}"
+        expected = hmac.new(os.environ["STREAM_SIGNING_KEY"].encode(), msg.encode(), hashlib.sha256).hexdigest()
+        return cid == camera_id and int(exp) > int(datetime.now().timestamp()) and hmac.compare_digest(sig, expected)
+    except Exception:
+        return False
+
+
+async def watch_stream(camera_id: str, proc):
+    tail = []
+    while True:
+        line = await proc.stderr.readline()
+        if not line:
+            break
+        tail.append(line.decode(errors="replace").strip())
+        tail = tail[-20:]
+        if b"frame=" in line or b"Opening" in line:
+            stream_status[camera_id] = {"state": "live", "stderrTail": tail}
+    rc = await proc.wait()
+    stream_status[camera_id] = {"state": "error" if rc else "stopped", "stderrTail": tail, "returncode": rc}
+    stream_procs.pop(camera_id, None)
+
+
+@api_router.post("/cameras/{camera_id}/stream/start")
+async def start_stream(camera_id: str, user=Depends(get_current_user)):
+    cam = await db.cameras.find_one({"_id": ObjectId(camera_id)})
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not cam.get("rtsp"):
+        raise HTTPException(status_code=400, detail="No RTSP URL configured for this channel")
+    token = make_stream_token(camera_id, int(datetime.now().timestamp() + 3600))
+    if camera_id in stream_procs:
+        return {"state": stream_status.get(camera_id, {}).get("state", "connecting"), "token": token}
+    out = HLS_ROOT / camera_id
+    shutil.rmtree(out, ignore_errors=True)
+    out.mkdir(parents=True, exist_ok=True)
+    source = cam["rtsp"]
+    cmd = [FFMPEG_BIN, "-hide_banner", "-loglevel", "warning"]
+    if source.startswith("rtsp://"):
+        cmd += ["-rtsp_transport", "tcp"]
+    else:
+        cmd += ["-stream_loop", "-1", "-re"]
+    cmd += [
+        "-i", source,
+        "-map", "0:v:0", "-map", "0:a?",
+        "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+        "-g", "25", "-keyint_min", "25", "-sc_threshold", "0",
+        "-c:a", "aac",
+        "-f", "hls", "-hls_time", "1", "-hls_list_size", "6",
+        "-hls_flags", "delete_segments+independent_segments+temp_file",
+        "-hls_segment_filename", str(out / "seg-%06d.ts"),
+        str(out / "index.m3u8"),
+    ]
+    proc = await asyncio.create_subprocess_exec(*cmd, stderr=asyncio.subprocess.PIPE)
+    stream_procs[camera_id] = proc
+    stream_status[camera_id] = {"state": "connecting", "stderrTail": []}
+    asyncio.create_task(watch_stream(camera_id, proc))
+    return {"state": "connecting", "token": token}
+
+
+@api_router.post("/cameras/{camera_id}/stream/stop")
+async def stop_stream(camera_id: str, user=Depends(get_current_user)):
+    proc = stream_procs.get(camera_id)
+    if proc and proc.returncode is None:
+        proc.terminate()
+    return {"state": "stopping"}
+
+
+@api_router.get("/cameras/{camera_id}/stream/status")
+async def stream_state(camera_id: str, user=Depends(get_current_user)):
+    st = stream_status.get(camera_id, {"state": "stopped"})
+    if st.get("state") == "connecting" and (HLS_ROOT / camera_id / "index.m3u8").exists():
+        st = {"state": "live", "stderrTail": st.get("stderrTail", [])}
+        stream_status[camera_id] = st
+    return st
+
+
+@api_router.get("/streams/{camera_id}/{file_path:path}")
+async def hls_file(camera_id: str, file_path: str, token: str = ""):
+    from fastapi.responses import FileResponse
+
+    if not token or not check_stream_token(camera_id, token):
+        raise HTTPException(status_code=403, detail="Invalid stream token")
+    if Path(file_path).name != file_path or Path(file_path).suffix not in {".m3u8", ".ts"}:
+        raise HTTPException(status_code=403, detail="Invalid file")
+    p = (HLS_ROOT / camera_id / file_path).resolve()
+    if HLS_ROOT not in p.parents or not p.is_file():
+        raise HTTPException(status_code=404, detail="Segment not found")
+    if p.suffix == ".m3u8":
+        text = p.read_text()
+        lines = [
+            f"{line}?token={token}" if line.strip() and not line.startswith("#") else line
+            for line in text.splitlines()
+        ]
+        return Response(
+            content="\n".join(lines) + "\n",
+            media_type="application/vnd.apple.mpegurl",
+            headers={"Cache-Control": "no-store"},
+        )
+    return FileResponse(p, media_type="video/mp2t", headers={"Cache-Control": "no-store"})
+
+
 # --- File upload (employee photos) ---
 
 @api_router.post("/upload/photo")
@@ -629,6 +897,9 @@ async def startup():
     await db.login_attempts.create_index("identifier")
     await db.sessions.create_index("jti", unique=True)
     await db.sessions.create_index("user_id")
+    await db.events.create_index("dedupeKey", unique=True)
+    await db.events.create_index("time")
+    HLS_ROOT.mkdir(parents=True, exist_ok=True)
     try:
         await run_in_threadpool(init_storage)
         logger.info("Object storage initialized")
@@ -653,4 +924,8 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    for proc in list(stream_procs.values()):
+        if proc.returncode is None:
+            proc.terminate()
+    shutil.rmtree(HLS_ROOT, ignore_errors=True)
     client.close()

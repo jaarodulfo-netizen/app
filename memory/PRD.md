@@ -70,6 +70,13 @@ AegisNet Security Command OS — a dark, SOC-grade SaaS interface for building a
 - Cameras accept RTSP URL per channel (Hikvision NVR format hint: /Streaming/Channels/101); RTSP LINKED badge on tiles. Architecture note: single NVR credentials, NVR pulls Hikvision cameras; reachable over VPN as local
 - Verified: curl chain (door CRUD, deactivate→login blocked→reactivate, self-delete guard, photo upload + 200 image/png serve, RTSP store) + Playwright e2e (place/rename/delete door, remote open on real door, officer controls visibility, photo input)
 
+## Real Events + Live Video Pipeline (build 7)
+- Hikvision ingestion: POST /api/ingest/hikvision secured with X-API-Key gateway key (HMAC compare), normalizes ISAPI AcsEvent payloads (face/card, grant/deny, doorNo→door code, cardNo→employee name), SHA-256 dedupe (unique index), raw discarded from reads
+- Simulated event generator REMOVED: feed is 100% real — events poll GET /api/events every 4s; remote-open and alarm-silence actions write real audit events as the logged-in officer
+- Gateway agent shipped at /app/scripts/hikvision_gateway.py (Digest auth to ISAPI, durable cursor, 5s poll, forwards to cloud)
+- Live video: per-channel RTSP→HLS via supervised ffmpeg (TCP transport, libx264 transcode — H.265-safe — 1s rolling segments), HMAC stream tokens (1h), playlist rewritten server-side so segments carry the token, lifecycle start/stop/status with stderr tail, hls.js player with GO LIVE / CONNECTING / LIVE / STREAM UNREACHABLE states, codec-unsupported browser message
+- Verified: 401 wrong gateway key, 2 Hikvision events inserted + normalized (dedupe repeat inserted 0), real events visible in dashboard feed, HLS playlist/segments 200 with token + 403 without, hls.js LEVEL_LOADED + FRAG_LOADED. NOTE: the headless test browser has no H.264 codec so the picture itself can't render here — playback will work in real Chrome/Edge/Safari; first live picture needs the user's NVR reachable from the server (VPN)
+
 ## Mocked / Not Real Yet
 - ALL data is simulated (no real gateway, NVR, scanner, or reader connectivity)
 - No backend persistence; state resets on reload

@@ -1,10 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { X, Plus, Minus, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, VideoOff, Cctv, Trash2, Loader2 } from 'lucide-react';
+import { X, Plus, Minus, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, VideoOff, Cctv, Trash2, Loader2, Play, Square, CircleAlert } from 'lucide-react';
 import dayjs from 'dayjs';
 import { toast } from 'sonner';
+import Hls from 'hls.js';
 import { PageHeader } from '../components/PageHeader';
 import { useNow, useSecurity } from '../context/SecurityContext';
+import { api, API_BASE, formatApiError } from '../context/AuthContext';
 
 function DeleteChip({ onConfirm, testid }) {
     const [armed, setArmed] = useState(false);
@@ -30,9 +32,150 @@ function DeleteChip({ onConfirm, testid }) {
     );
 }
 
+function LivePlayer({ cam, autoStart = false }) {
+    const [state, setState] = useState('idle');
+    const [err, setErr] = useState('');
+    const videoRef = useRef(null);
+    const hlsRef = useRef(null);
+    const pollRef = useRef(null);
+    const tokenRef = useRef('');
+
+    const attach = (token) => {
+        const url = `${API_BASE}/streams/${cam.id}/index.m3u8?token=${encodeURIComponent(token)}`;
+        const video = videoRef.current;
+        if (!video) return;
+        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = url;
+            video.play().catch(() => {});
+        } else if (Hls.isSupported()) {
+            const hls = new Hls({ lowLatencyMode: true });
+            hls.on(Hls.Events.ERROR, (_ev, data) => {
+                if (data?.fatal) {
+                    clearInterval(pollRef.current);
+                    setErr(data.details === 'bufferAddCodecError' ? 'BROWSER DOES NOT SUPPORT THIS CODEC (H.264) — USE CHROME/EDGE/SAFARI' : `PLAYBACK ERROR · ${data.details}`);
+                    setState('error');
+                }
+            });
+            hls.loadSource(url);
+            hls.attachMedia(video);
+            hlsRef.current = hls;
+        }
+    };
+
+    const start = async () => {
+        setState('connecting');
+        setErr('');
+        try {
+            const { data } = await api.post(`/cameras/${cam.id}/stream/start`);
+            tokenRef.current = data.token;
+            pollRef.current = setInterval(async () => {
+                try {
+                    const { data: s } = await api.get(`/cameras/${cam.id}/stream/status`);
+                    if (s.state === 'live' || s.state === 'stopped') {
+                        clearInterval(pollRef.current);
+                        setState('live');
+                        attach(tokenRef.current);
+                    } else if (s.state === 'error') {
+                        clearInterval(pollRef.current);
+                        setErr((s.stderrTail || []).slice(-1)[0] || 'Stream unreachable');
+                        setState('error');
+                    }
+                } catch (e) {
+                    /* keep polling */
+                }
+            }, 1500);
+        } catch (e) {
+            setErr(formatApiError(e.response?.data?.detail));
+            setState('error');
+        }
+    };
+
+    const stop = async () => {
+        clearInterval(pollRef.current);
+        hlsRef.current?.destroy();
+        hlsRef.current = null;
+        setState('idle');
+        try {
+            await api.post(`/cameras/${cam.id}/stream/stop`);
+        } catch (e) {
+            /* already gone */
+        }
+    };
+
+    useEffect(() => {
+        if (autoStart) start();
+        return () => {
+            clearInterval(pollRef.current);
+            hlsRef.current?.destroy();
+            if (tokenRef.current) api.post(`/cameras/${cam.id}/stream/stop`).catch(() => {});
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    return (
+        <div className="absolute inset-0" data-testid={`live-player-${cam.id}`}>
+            {(state === 'live' || state === 'connecting') && (
+                <video ref={videoRef} muted autoPlay playsInline className={`absolute inset-0 h-full w-full object-cover ${state === 'live' ? '' : 'opacity-0'}`} />
+            )}
+            {state === 'idle' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-grid">
+                    <Cctv size={26} className="text-sky-500/50" />
+                    <p className="mono text-[10px] tracking-[0.3em] text-sky-400/70">RTSP CHANNEL LINKED</p>
+                    <button
+                        data-testid={`go-live-${cam.id}`}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            start();
+                        }}
+                        className="flex items-center gap-2 rounded-full bg-gradient-to-r from-[#fee396] to-[#ea7f2b] px-6 py-2.5 font-head font-bold tracking-widest text-xs text-[#2b1608] hover:opacity-90 transition-opacity duration-200"
+                    >
+                        <Play size={13} /> GO LIVE
+                    </button>
+                </div>
+            )}
+            {state === 'connecting' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70">
+                    <Loader2 size={26} className="animate-spin text-sky-400" />
+                    <p className="mono text-[10px] tracking-[0.3em] text-sky-300">CONNECTING TO NVR…</p>
+                </div>
+            )}
+            {state === 'error' && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 px-6">
+                    <CircleAlert size={24} className="text-red-400" />
+                    <p className="mono text-[10px] tracking-[0.3em] text-red-300">STREAM UNREACHABLE</p>
+                    <p className="mono text-[9px] tracking-wider text-slate-500 text-center break-all max-w-xs">{err}</p>
+                    <button
+                        data-testid={`retry-live-${cam.id}`}
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            start();
+                        }}
+                        className="mt-1 rounded-full border border-red-400/40 px-5 py-2 mono text-[10px] tracking-widest text-red-300 hover:bg-red-500/10 transition-colors duration-200"
+                    >
+                        RETRY
+                    </button>
+                </div>
+            )}
+            {state === 'live' && (
+                <button
+                    data-testid={`stop-live-${cam.id}`}
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        stop();
+                    }}
+                    className="absolute left-3 top-9 z-10 flex items-center gap-1.5 rounded border border-white/15 bg-black/60 px-2 py-1 mono text-[9px] tracking-widest text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity duration-200 hover:text-red-300"
+                >
+                    <Square size={10} /> STOP
+                </button>
+            )}
+        </div>
+    );
+}
+
 function CamTile({ cam, onZoom, onDelete, large = false }) {
     const now = useNow(1000);
     const live = cam.status === 'live';
+    const hasStream = Boolean(cam.rtsp);
     return (
         <div
             data-testid={`cam-tile-${(cam.code || 'x').toLowerCase()}`}
@@ -41,7 +184,9 @@ function CamTile({ cam, onZoom, onDelete, large = false }) {
                 live ? 'border-sky-500/15 cursor-pointer transition-colors duration-300 hover:border-sky-400/50' : 'border-red-500/20'
             }`}
         >
-            {cam.img ? (
+            {hasStream ? (
+                <LivePlayer cam={cam} autoStart={large} />
+            ) : cam.img ? (
                 <>
                     <img
                         src={cam.img}
@@ -54,8 +199,8 @@ function CamTile({ cam, onZoom, onDelete, large = false }) {
             ) : live ? (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-grid">
                     <Cctv size={large ? 34 : 22} className="text-sky-500/50" />
-                    <p className={`mono tracking-[0.35em] text-sky-400/70 ${large ? 'text-sm' : 'text-[10px]'}`}>AWAITING FIRST FRAME</p>
-                    <p className="mono text-[9px] tracking-widest text-slate-600">CHANNEL REGISTERED · CONNECTING TO NVR</p>
+                    <p className={`mono tracking-[0.35em] text-sky-400/70 ${large ? 'text-sm' : 'text-[10px]'}`}>NO STREAM CONFIGURED</p>
+                    <p className="mono text-[9px] tracking-widest text-slate-600">ADD THE RTSP URL OF THIS NVR CHANNEL</p>
                 </div>
             ) : (
                 <div className="absolute inset-0">
@@ -69,8 +214,14 @@ function CamTile({ cam, onZoom, onDelete, large = false }) {
 
             {onDelete && <DeleteChip testid={`delete-cam-${cam.id}`} onConfirm={() => onDelete(cam)} />}
 
-            {live && !large && (
-                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+            {hasStream && !large && (
+                <span className="absolute left-3 top-9 z-10 mono text-[8px] tracking-widest text-gold border border-[#ea7f2b]/40 bg-[#ea7f2b]/10 rounded px-1.5 py-0.5">
+                    RTSP LINKED
+                </span>
+            )}
+
+            {live && !large && !hasStream && (
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200">
                     <div className="grid grid-cols-3 gap-1 rounded-lg bg-black/50 backdrop-blur-md p-2 border border-sky-500/30">
                         <span />
                         <button data-testid={`ptz-up-${(cam.code || 'x').toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><ChevronUp size={14} /></button>
@@ -83,12 +234,6 @@ function CamTile({ cam, onZoom, onDelete, large = false }) {
                         <button data-testid={`ptz-zoom-out-${(cam.code || 'x').toLowerCase()}`} onClick={(e) => e.stopPropagation()} className="p-1.5 rounded text-sky-300 hover:bg-sky-500/20"><Minus size={14} /></button>
                     </div>
                 </div>
-            )}
-
-            {cam.rtsp && (
-                <span className="absolute left-3 top-9 z-10 mono text-[8px] tracking-widest text-gold border border-[#ea7f2b]/40 bg-[#ea7f2b]/10 rounded px-1.5 py-0.5">
-                    RTSP LINKED
-                </span>
             )}
 
             <span className={`absolute left-3 top-2.5 flex items-center gap-1.5 mono text-[10px] tracking-widest ${live ? 'text-red-400' : 'text-slate-600'}`}>
@@ -148,7 +293,7 @@ function AddCameraModal({ open, onClose }) {
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 24 }}
                         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-                        className="relative w-full max-w-md rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8"
+                        className="relative w-full max-w-md rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8 max-h-[92vh] overflow-y-auto"
                     >
                         <div className="flex items-start justify-between">
                             <div>
@@ -216,6 +361,7 @@ export default function LiveFeeds() {
 
     const remove = async (cam) => {
         try {
+            await api.post(`/cameras/${cam.id}/stream/stop`).catch(() => {});
             await deleteCamera(cam.id);
             toast.success('CHANNEL REMOVED', { description: `${cam.code} · ${cam.label}` });
         } catch (e) {

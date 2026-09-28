@@ -1,32 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { api } from './AuthContext';
+import { api, useAuth } from './AuthContext';
 
 const SecurityContext = createContext(null);
 
 export const useSecurity = () => useContext(SecurityContext);
 
-const DENIED_DETAILS = ['FACE MISMATCH 61.2%', 'CARD EXPIRED', 'OUT OF SCHEDULE', 'ANTI-PASSBACK VIOLATION'];
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-function localEvent(employees, doors) {
-    const door = pick(doors);
-    const method = Math.random() > 0.45 ? 'FACE' : 'CARD';
-    const denied = Math.random() < 0.16;
-    return {
-        id: `ev-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        ts: Date.now(),
-        person: employees.length ? pick(employees).name : 'UNREGISTERED CREDENTIAL',
-        door: door.name,
-        doorCode: door.code,
-        zone: door.zone,
-        method,
-        result: denied ? 'denied' : 'granted',
-        detail: denied ? pick(DENIED_DETAILS) : method === 'FACE' ? `MATCH ${(97 + Math.random() * 2.9).toFixed(1)}%` : 'CARD VERIFIED',
-    };
-}
-
 export function SecurityProvider({ children }) {
+    const { user } = useAuth();
     const [doors, setDoors] = useState([]);
     const [employees, setEmployees] = useState(null);
     const [cameras, setCameras] = useState(null);
@@ -38,8 +19,8 @@ export function SecurityProvider({ children }) {
     liveRef.current = live;
     const doorsRef = useRef(doors);
     doorsRef.current = doors;
-    const employeesRef = useRef([]);
-    employeesRef.current = employees || [];
+    const lastEventTsRef = useRef(0);
+    const firstFetchRef = useRef(true);
 
     useEffect(() => {
         Promise.all([api.get('/employees'), api.get('/cameras'), api.get('/devices'), api.get('/doors')])
@@ -56,20 +37,39 @@ export function SecurityProvider({ children }) {
             });
     }, []);
 
-    const pushEvent = useCallback((e) => setEvents((prev) => [e, ...prev].slice(0, 90)), []);
+    const fetchEvents = useCallback(async () => {
+        try {
+            const { data } = await api.get('/events');
+            setEvents(data);
+            const fresh = data.filter((e) => e.ts > lastEventTsRef.current);
+            if (fresh.length) lastEventTsRef.current = Math.max(...data.map((e) => e.ts));
+            if (!firstFetchRef.current) {
+                const denied = fresh.find((e) => e.result === 'denied');
+                if (denied) toast.error(`ACCESS DENIED · ${denied.doorCode}`, { description: `${denied.person} — ${denied.detail}` });
+            }
+            firstFetchRef.current = false;
+        } catch (e) {
+            /* keep last known feed */
+        }
+    }, []);
 
     useEffect(() => {
+        fetchEvents();
         const t = setInterval(() => {
-            if (!liveRef.current) return;
-            if (!doorsRef.current.length) return;
-            const e = localEvent(employeesRef.current, doorsRef.current);
-            pushEvent(e);
-            if (e.result === 'denied') {
-                toast.error(`ACCESS DENIED · ${e.doorCode}`, { description: `${e.person} — ${e.detail}` });
-            }
-        }, 5200);
+            if (liveRef.current) fetchEvents();
+        }, 4000);
         return () => clearInterval(t);
-    }, [pushEvent]);
+    }, [fetchEvents]);
+
+    const logEvent = useCallback(async (payload) => {
+        try {
+            const { data } = await api.post('/events', payload);
+            setEvents((prev) => [data, ...prev].slice(0, 200));
+            lastEventTsRef.current = Math.max(lastEventTsRef.current, data.ts);
+        } catch (e) {
+            /* audit write failed silently */
+        }
+    }, []);
 
     const openDoor = useCallback(
         (doorId) => {
@@ -78,13 +78,11 @@ export function SecurityProvider({ children }) {
             setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: 'opening' } : d)));
             setTimeout(() => {
                 setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: 'unlocked' } : d)));
-                pushEvent({
-                    id: `ev-${Date.now()}-remote`,
-                    ts: Date.now(),
-                    person: 'OPS CONSOLE · REMOTE',
+                logEvent({
+                    person: `${user?.name || 'OPS CONSOLE'} · REMOTE`,
                     door: door.name,
                     doorCode: door.code,
-                    zone: door.zone,
+                    zone: door.zone || '',
                     method: 'REMOTE',
                     result: 'granted',
                     detail: 'REMOTE OPEN COMMAND',
@@ -95,13 +93,28 @@ export function SecurityProvider({ children }) {
                 setDoors((prev) => prev.map((d) => (d.id === doorId && d.status === 'unlocked' ? { ...d, status: 'locked' } : d)));
             }, 11600);
         },
-        [pushEvent],
+        [logEvent, user],
     );
 
-    const silenceDoor = useCallback((doorId) => {
-        setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: 'locked' } : d)));
-        toast.info('ALARM SILENCED', { description: 'Door returned to locked state' });
-    }, []);
+    const silenceDoor = useCallback(
+        (doorId) => {
+            const door = doorsRef.current.find((d) => d.id === doorId);
+            setDoors((prev) => prev.map((d) => (d.id === doorId ? { ...d, status: 'locked' } : d)));
+            if (door) {
+                logEvent({
+                    person: `${user?.name || 'OPS CONSOLE'} · REMOTE`,
+                    door: door.name,
+                    doorCode: door.code,
+                    zone: door.zone || '',
+                    method: 'REMOTE',
+                    result: 'granted',
+                    detail: 'ALARM SILENCED BY OPERATOR',
+                });
+            }
+            toast.info('ALARM SILENCED', { description: 'Door returned to locked state' });
+        },
+        [logEvent, user],
+    );
 
     const addEmployee = useCallback(async (emp) => {
         const { data } = await api.post('/employees', emp);
@@ -134,7 +147,7 @@ export function SecurityProvider({ children }) {
     const deleteDevice = useCallback(async (id) => {
         await api.delete(`/devices/${id}`);
         setDevices((prev) => (prev || []).filter((d) => d.id !== id));
-        setCameras((prev) => (prev || []).map((c) => (c.nvr === id ? { ...c, nvr: '' } : c)));
+        setCameras((prev) => (prev || []).map((c) => (c.nvr === id ? { ...c, nvr: '', nvrName: '' } : c)));
     }, []);
 
     const addDoor = useCallback(async (door) => {
