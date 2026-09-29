@@ -758,13 +758,24 @@ async def hls_file(camera_id: str, file_path: str, token: str = ""):
     return FileResponse(p, media_type="video/mp2t", headers={"Cache-Control": "no-store"})
 
 
-# --- Attendance (one dedicated facial terminal) ---
+# --- Attendance / payroll (one dedicated facial terminal) ---
 
 ATTENDANCE_TZ = ZoneInfo("America/Monterrey")
+ATTENDANCE_SHIFTS = {
+    "A": {"start": time(7, 0), "hours": 8},
+    "B": {"start": time(15, 0), "hours": 8},
+    "C": {"start": time(23, 0), "hours": 8},
+}
+ATTENDANCE_SESSION_MAX_HOURS = 16
 
 
 def attendance_device_match(device: dict) -> list:
-    clauses = [{"source_device_id": str(device["_id"])}]
+    clauses = []
+    # Gateway events use gatewayDeviceId as source_device_id. Older/manual records
+    # may use the Mongo object id, display name, IP or serial, so keep all aliases.
+    if device.get("gatewayDeviceId"):
+        clauses.append({"source_device_id": str(device["gatewayDeviceId"])})
+    clauses.append({"source_device_id": str(device["_id"])})
     if device.get("name"):
         clauses.append({"source_device": device["name"]})
     if device.get("ip"):
@@ -774,17 +785,152 @@ def attendance_device_match(device: dict) -> list:
     return clauses
 
 
+def _local_dt(value):
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(ATTENDANCE_TZ)
+
+
+def _shift_start_for_scan(local_scan: datetime):
+    candidates = []
+    for day_offset in (-1, 0, 1):
+        d = local_scan.date() + timedelta(days=day_offset)
+        for code, cfg in ATTENDANCE_SHIFTS.items():
+            start = datetime.combine(d, cfg["start"], tzinfo=ATTENDANCE_TZ)
+            candidates.append((abs((local_scan - start).total_seconds()), code, start))
+    _, code, scheduled_start = min(candidates, key=lambda x: x[0])
+    scheduled_end = scheduled_start + timedelta(hours=ATTENDANCE_SHIFTS[code]["hours"])
+    return code, scheduled_start, scheduled_end
+
+
+def _duration_parts(first_in: datetime, last_out: datetime):
+    if not first_in or not last_out or last_out <= first_in:
+        return 0, 0, 0
+    worked = max(0, int((last_out - first_in).total_seconds()))
+    regular = min(worked, 8 * 3600)
+    overtime = max(0, worked - regular)
+    return worked, regular, overtime
+
+
+def _seconds_hhmm(seconds: int) -> str:
+    seconds = max(0, int(seconds or 0))
+    hours, rem = divmod(seconds, 3600)
+    minutes = rem // 60
+    return f"{hours:02d}:{minutes:02d}"
+
+
+async def _attendance_device():
+    cfg = await db.attendance_config.find_one({"_id": "primary"})
+    if not cfg:
+        return None
+    try:
+        return await db.devices.find_one({"_id": ObjectId(cfg["device_id"])})
+    except Exception:
+        return None
+
+
+async def _attendance_sessions(start_day, end_day, device):
+    # Query with generous buffers so Shift C can begin before midnight and finish
+    # the following morning, and overtime never gets cut at a calendar boundary.
+    query_local_start = datetime.combine(start_day - timedelta(days=1), time.min, tzinfo=ATTENDANCE_TZ)
+    query_local_end = datetime.combine(end_day + timedelta(days=2), time.min, tzinfo=ATTENDANCE_TZ)
+    query = {
+        "time": {
+            "$gte": query_local_start.astimezone(timezone.utc),
+            "$lt": query_local_end.astimezone(timezone.utc),
+        },
+        "result": "granted",
+        "$or": attendance_device_match(device),
+    }
+    docs = await db.events.find(query).sort("time", 1).to_list(20000)
+
+    by_person = {}
+    for e in docs:
+        person = str(e.get("person") or "").strip()
+        if not person or person.upper() in {"UNKNOWN", "UNKNOWN CREDENTIAL"}:
+            continue
+        local_t = _local_dt(e.get("time"))
+        if not local_t:
+            continue
+        by_person.setdefault(person, []).append({
+            "time": local_t,
+            "method": e.get("method"),
+            "detail": e.get("detail"),
+            "cardNo": e.get("cardNo"),
+        })
+
+    sessions = []
+    for person, scans in by_person.items():
+        scans.sort(key=lambda x: x["time"])
+        i = 0
+        while i < len(scans):
+            first = scans[i]["time"]
+            shift, scheduled_start, scheduled_end = _shift_start_for_scan(first)
+            capture_end = scheduled_start + timedelta(hours=ATTENDANCE_SESSION_MAX_HOURS)
+
+            session_scans = [scans[i]]
+            j = i + 1
+            while j < len(scans) and scans[j]["time"] < capture_end:
+                session_scans.append(scans[j])
+                j += 1
+
+            last = session_scans[-1]["time"]
+            worked, regular, overtime = _duration_parts(first, last)
+            shift_day = scheduled_start.date()
+
+            if start_day <= shift_day <= end_day:
+                sessions.append({
+                    "person": person,
+                    "shift": shift,
+                    "shift_date": shift_day.isoformat(),
+                    "scheduled_start": scheduled_start.isoformat(),
+                    "scheduled_end": scheduled_end.isoformat(),
+                    "first_in": first.isoformat(),
+                    "last_out": last.isoformat() if len(session_scans) > 1 else None,
+                    "events": len(session_scans),
+                    "worked_seconds": worked,
+                    "regular_seconds": regular,
+                    "overtime_seconds": overtime,
+                    "worked": _seconds_hhmm(worked),
+                    "regular": _seconds_hhmm(regular),
+                    "overtime": _seconds_hhmm(overtime),
+                    "complete": len(session_scans) > 1 and worked >= 8 * 3600,
+                    "status": "complete" if len(session_scans) > 1 and worked >= 8 * 3600 else ("incomplete" if len(session_scans) > 1 else "open"),
+                })
+
+            i = max(j, i + 1)
+
+    sessions.sort(key=lambda r: (r["shift_date"], r["scheduled_start"], r["person"]))
+    return sessions
+
+
+def _attendance_summary(rows):
+    return {
+        "present": len(rows),
+        "events": sum(int(r.get("events", 0)) for r in rows),
+        "worked_seconds": sum(int(r.get("worked_seconds", 0)) for r in rows),
+        "regular_seconds": sum(int(r.get("regular_seconds", 0)) for r in rows),
+        "overtime_seconds": sum(int(r.get("overtime_seconds", 0)) for r in rows),
+        "worked": _seconds_hhmm(sum(int(r.get("worked_seconds", 0)) for r in rows)),
+        "regular": _seconds_hhmm(sum(int(r.get("regular_seconds", 0)) for r in rows)),
+        "overtime": _seconds_hhmm(sum(int(r.get("overtime_seconds", 0)) for r in rows)),
+        "incomplete": sum(1 for r in rows if r.get("status") != "complete"),
+    }
+
+
 @api_router.get("/attendance/config")
 async def get_attendance_config(user=Depends(get_current_user)):
     cfg = await db.attendance_config.find_one({"_id": "primary"})
     if not cfg:
-        return {"device_id": None, "device": None}
+        return {"device_id": None, "device": None, "shifts": ATTENDANCE_SHIFTS}
     try:
         device = await db.devices.find_one({"_id": ObjectId(cfg["device_id"])})
     except Exception:
         device = None
     if not device:
-        return {"device_id": cfg.get("device_id"), "device": None}
+        return {"device_id": cfg.get("device_id"), "device": None, "shifts": ATTENDANCE_SHIFTS}
     return {
         "device_id": str(device["_id"]),
         "device": {
@@ -793,6 +939,12 @@ async def get_attendance_config(user=Depends(get_current_user)):
             "ip": device.get("ip"),
             "detail": device.get("detail"),
             "status": device.get("status", "online"),
+            "gatewayDeviceId": device.get("gatewayDeviceId"),
+        },
+        "shifts": {
+            "A": "07:00-15:00",
+            "B": "15:00-23:00",
+            "C": "23:00-07:00",
         },
     }
 
@@ -817,54 +969,47 @@ async def set_attendance_config(body: AttendanceConfigIn, user=Depends(require_c
 
 @api_router.get("/attendance")
 async def attendance_summary(date: Optional[str] = None, user=Depends(get_current_user)):
-    cfg = await db.attendance_config.find_one({"_id": "primary"})
-    if not cfg:
-        return {"date": date, "device": None, "rows": [], "summary": {"present": 0, "events": 0}}
-
-    try:
-        device = await db.devices.find_one({"_id": ObjectId(cfg["device_id"])})
-    except Exception:
-        device = None
+    device = await _attendance_device()
     if not device:
-        return {"date": date, "device": None, "rows": [], "summary": {"present": 0, "events": 0}}
+        return {"date": date, "device": None, "rows": [], "summary": _attendance_summary([])}
 
     try:
         target_day = datetime.strptime(date, "%Y-%m-%d").date() if date else datetime.now(ATTENDANCE_TZ).date()
     except ValueError:
         raise HTTPException(status_code=400, detail="Date must be YYYY-MM-DD")
 
-    local_start = datetime.combine(target_day, time.min, tzinfo=ATTENDANCE_TZ)
-    local_end = local_start + timedelta(days=1)
-    start_utc = local_start.astimezone(timezone.utc)
-    end_utc = local_end.astimezone(timezone.utc)
-
-    query = {
-        "time": {"$gte": start_utc, "$lt": end_utc},
-        "result": "granted",
-        "$or": attendance_device_match(device),
-    }
-    docs = await db.events.find(query).sort("time", 1).to_list(5000)
-
-    grouped = {}
-    for e in docs:
-        person = e.get("person") or "UNKNOWN"
-        row = grouped.setdefault(person, {"person": person, "events": 0, "first_in": None, "last_out": None})
-        row["events"] += 1
-        t = e.get("time")
-        if isinstance(t, datetime):
-            if t.tzinfo is None:
-                t = t.replace(tzinfo=timezone.utc)
-            local_t = t.astimezone(ATTENDANCE_TZ)
-            if row["first_in"] is None:
-                row["first_in"] = local_t.isoformat()
-            row["last_out"] = local_t.isoformat()
-
-    rows = sorted(grouped.values(), key=lambda r: (r["first_in"] or "", r["person"]))
+    rows = await _attendance_sessions(target_day, target_day, device)
     return {
         "date": target_day.isoformat(),
         "device": {"id": str(device["_id"]), "name": device.get("name"), "ip": device.get("ip")},
         "rows": rows,
-        "summary": {"present": len(rows), "events": len(docs)},
+        "summary": _attendance_summary(rows),
+    }
+
+
+@api_router.get("/attendance/report")
+async def attendance_report(start: str, end: str, user=Depends(get_current_user)):
+    try:
+        start_day = datetime.strptime(start, "%Y-%m-%d").date()
+        end_day = datetime.strptime(end, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="start and end must be YYYY-MM-DD")
+    if end_day < start_day:
+        raise HTTPException(status_code=400, detail="End date must be on or after start date")
+    if (end_day - start_day).days > 62:
+        raise HTTPException(status_code=400, detail="Attendance reports are limited to 63 days")
+
+    device = await _attendance_device()
+    if not device:
+        return {"start": start, "end": end, "device": None, "rows": [], "summary": _attendance_summary([])}
+
+    rows = await _attendance_sessions(start_day, end_day, device)
+    return {
+        "start": start_day.isoformat(),
+        "end": end_day.isoformat(),
+        "device": {"id": str(device["_id"]), "name": device.get("name"), "ip": device.get("ip")},
+        "rows": rows,
+        "summary": _attendance_summary(rows),
     }
 
 
