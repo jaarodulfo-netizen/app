@@ -50,15 +50,24 @@ function DeleteChip({ onConfirm, testid }) {
     );
 }
 
-function DeviceCard({ device, index, onDelete }) {
+function DeviceCard({ device, index, onDelete, onNvrSynced }) {
     const [syncing, setSyncing] = useState(false);
     const s = STATUS[device.status] || STATUS.online;
-    const sync = () => {
+    const sync = async () => {
+        if (device.type !== 'nvr') {
+            toast.info('SYNC NOT REQUIRED', { description: `${device.name} is managed by the local gateway` });
+            return;
+        }
         setSyncing(true);
-        setTimeout(() => {
+        try {
+            const { data } = await api.post(`/devices/${device.id}/sync-nvr-channels`);
+            await onNvrSynced?.();
+            toast.success('NVR CHANNELS SYNCED', { description: `${device.name} · ${data.count || 0} channels imported` });
+        } catch (err) {
+            toast.error('NVR SYNC FAILED', { description: err?.response?.data?.detail || 'Local gateway could not read the NVR channels' });
+        } finally {
             setSyncing(false);
-            toast.success('SYNC COMPLETE', { description: `${device.name} · config pushed` });
-        }, 1300);
+        }
     };
     return (
         <motion.div
@@ -91,7 +100,7 @@ function DeviceCard({ device, index, onDelete }) {
                         className="flex items-center gap-1.5 mono text-[10px] tracking-widest text-sky-400 transition-colors duration-200 hover:text-cyan-300"
                     >
                         <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
-                        {syncing ? 'SYNCING…' : 'SYNC NOW'}
+                        {syncing ? 'SYNCING…' : device.type === 'nvr' ? 'SYNC NVR CHANNELS' : 'SYNC NOW'}
                     </button>
                     <DeleteChip testid={`delete-device-${device.id}`} onConfirm={() => onDelete(device)} />
                 </div>
@@ -189,7 +198,7 @@ function AddDeviceModal({ open, onClose }) {
 }
 
 export default function Devices() {
-    const { devices, deleteDevice } = useSecurity();
+    const { devices, deleteDevice, refreshCameras } = useSecurity();
     const [addOpen, setAddOpen] = useState(false);
     const list = devices || [];
     const online = list.filter((d) => d.status === 'online').length;
@@ -252,7 +261,7 @@ export default function Devices() {
                             </div>
                             <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">
                                 {g.items.map((d, i) => (
-                                    <DeviceCard key={d.id} device={d} index={i} onDelete={remove} />
+                                    <DeviceCard key={d.id} device={d} index={i} onDelete={remove} onNvrSynced={refreshCameras} />
                                 ))}
                             </div>
                         </section>
