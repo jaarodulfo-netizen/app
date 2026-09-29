@@ -1506,6 +1506,97 @@ async def delete_device(item_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+@api_router.post("/devices/{item_id}/sync-nvr-channels")
+async def sync_nvr_channels(item_id: str, user=Depends(get_current_user)):
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid NVR id")
+    device = await db.devices.find_one({"_id": oid})
+    if not device:
+        raise HTTPException(status_code=404, detail="NVR not found")
+    if device.get("type") != "nvr":
+        raise HTTPException(status_code=400, detail="Device is not an NVR")
+    if not device.get("ip"):
+        raise HTTPException(status_code=400, detail="NVR IP address is missing")
+
+    gateway_result = await send_gateway_command({
+        "kind": "nvr.channels",
+        "nvr": {
+            "id": item_id,
+            "name": device.get("name") or "NVR",
+            "ip": device.get("ip"),
+        },
+    })
+
+    channels = gateway_result.get("channels") if isinstance(gateway_result, dict) else None
+    if not isinstance(channels, list):
+        raise HTTPException(
+            status_code=502,
+            detail="Local gateway did not return an NVR channel list. Update the Kerma local gateway with NVR channel discovery support.",
+        )
+
+    synced = []
+    now = datetime.now(timezone.utc)
+    for raw in channels:
+        try:
+            channel_no = int(raw.get("channelNo") or raw.get("channel") or raw.get("id"))
+        except Exception:
+            continue
+        if channel_no < 1:
+            continue
+
+        label = str(raw.get("name") or raw.get("label") or f"CHANNEL {channel_no}").strip()
+        if not label:
+            label = f"CHANNEL {channel_no}"
+
+        enabled = bool(raw.get("enabled", True))
+        rtsp_path = str(raw.get("rtspPath") or f"/Streaming/Channels/{channel_no}01")
+        code = f"{device.get('name') or 'NVR'}-CH{channel_no:02d}"
+
+        existing = await db.cameras.find_one({"nvr": item_id, "channelNo": channel_no})
+        fields = {
+            "label": label,
+            "location": str(raw.get("location") or ""),
+            "nvr": item_id,
+            "nvrName": device.get("name") or "",
+            "nvrIp": device.get("ip"),
+            "channelNo": channel_no,
+            "rtspPath": rtsp_path,
+            "status": "live" if enabled else "offline",
+            "source": "nvr-sync",
+            "updated_at": now,
+        }
+        if existing:
+            await db.cameras.update_one({"_id": existing["_id"]}, {"$set": fields})
+            cam = await db.cameras.find_one({"_id": existing["_id"]})
+        else:
+            fields.update({
+                "code": code,
+                "rtsp": "",
+                "img": None,
+                "created_at": now,
+            })
+            r = await db.cameras.insert_one(fields)
+            cam = await db.cameras.find_one({"_id": r.inserted_id})
+        synced.append(doc_id(cam))
+
+    await db.devices.update_one(
+        {"_id": oid},
+        {"$set": {
+            "channelCount": len(synced),
+            "lastChannelSync": now,
+            "lastChannelSyncBy": user["email"],
+        }},
+    )
+    return {
+        "ok": True,
+        "nvr": {"id": item_id, "name": device.get("name"), "ip": device.get("ip")},
+        "count": len(synced),
+        "channels": synced,
+    }
+
+
 @api_router.get("/doors")
 async def list_doors(user=Depends(get_current_user)):
     docs = await db.doors.find().sort("created_at", 1).to_list(200)
