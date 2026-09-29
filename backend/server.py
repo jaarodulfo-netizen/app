@@ -620,7 +620,13 @@ async def ingest_hikvision(request: Request):
 
 @api_router.get("/events")
 async def list_events(limit: int = 200, user=Depends(get_current_user)):
-    docs = await db.events.find({}, {"raw": 0}).sort("time", -1).to_list(min(limit, 500))
+    query = {}
+    attendance_device = await _attendance_device()
+    if attendance_device:
+        matches = attendance_device_match(attendance_device)
+        if matches:
+            query = {"$nor": matches}
+    docs = await db.events.find(query, {"raw": 0}).sort("time", -1).to_list(min(limit, 500))
     return [event_out(d) for d in docs]
 
 
@@ -785,6 +791,20 @@ def attendance_device_match(device: dict) -> list:
     return clauses
 
 
+async def _is_attendance_gateway_event(event: dict) -> bool:
+    device = await _attendance_device()
+    if not device:
+        return False
+    event_device_id = str(event.get("deviceId") or event.get("device_id") or "")
+    event_device_name = str(event.get("deviceName") or "")
+    gateway_device_id = str(device.get("gatewayDeviceId") or "")
+    if gateway_device_id and event_device_id == gateway_device_id:
+        return True
+    if event_device_name and device.get("name") and event_device_name == str(device.get("name")):
+        return True
+    return False
+
+
 def _local_dt(value):
     if not isinstance(value, datetime):
         return None
@@ -844,7 +864,13 @@ async def _attendance_sessions(start_day, end_day, device):
         "result": "granted",
         "$or": attendance_device_match(device),
     }
-    docs = await db.events.find(query).sort("time", 1).to_list(20000)
+    attendance_docs = await db.attendance_events.find(query).sort("time", 1).to_list(20000)
+    legacy_docs = await db.events.find(query).sort("time", 1).to_list(20000)
+    docs_by_key = {}
+    for doc in attendance_docs + legacy_docs:
+        key = str(doc.get("dedupeKey") or doc.get("_id"))
+        docs_by_key[key] = doc
+    docs = sorted(docs_by_key.values(), key=lambda d: d.get("time") or datetime.min.replace(tzinfo=timezone.utc))
 
     by_person = {}
     for e in docs:
@@ -1144,8 +1170,9 @@ async def gateway_socket(websocket: WebSocket):
             if msg_type == "event":
                 event = msg.get("event") or {}
                 doc = await gateway_event_doc(event)
+                target = db.attendance_events if await _is_attendance_gateway_event(event) else db.events
                 try:
-                    await db.events.insert_one(doc)
+                    await target.insert_one(doc)
                 except Exception as e:
                     if "duplicate key" not in str(e):
                         logger.warning("Gateway event insert failed: %s", e)
