@@ -136,6 +136,12 @@ export function SecurityProvider({ children }) {
         setEmployees((prev) => (prev || []).filter((e) => e.id !== id));
     }, []);
 
+    const refreshCameras = useCallback(async () => {
+        const { data } = await api.get('/cameras');
+        setCameras(data);
+        return data;
+    }, []);
+
     const addCamera = useCallback(async (cam) => {
         const { data } = await api.post('/cameras', cam);
         setCameras((prev) => [...(prev || []), data]);
@@ -198,6 +204,7 @@ export function SecurityProvider({ children }) {
                 addEmployee,
                 updateEmployee,
                 deleteEmployee,
+                refreshCameras,
                 addCamera,
                 deleteCamera,
                 addDevice,
