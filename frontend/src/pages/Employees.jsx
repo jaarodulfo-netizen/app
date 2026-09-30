@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save, Search, Filter } from 'lucide-react';
+import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save, Search, Filter, ShieldCheck, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -39,11 +39,176 @@ function DeleteButton({ onConfirm, testid }) {
     );
 }
 
+function AccessLevelsModal({ open, onClose }) {
+    const { doors } = useSecurity();
+    const [levels, setLevels] = useState([]);
+    const [name, setName] = useState('');
+    const [description, setDescription] = useState('');
+    const [selected, setSelected] = useState([]);
+    const [saving, setSaving] = useState(false);
+
+    const load = async () => {
+        try {
+            const { data } = await api.get('/access-levels');
+            setLevels(data || []);
+        } catch (e) {
+            toast.error('ACCESS LEVELS FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        }
+    };
+
+    useEffect(() => {
+        if (open) load();
+    }, [open]);
+
+    const physicalDoors = (doors || []).filter((d) => d.gatewayDeviceId && d.doorNo);
+
+    const toggle = (key) => {
+        setSelected((prev) => prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]);
+    };
+
+    const save = async () => {
+        if (!name.trim() || selected.length === 0) return;
+        const doorRights = {};
+        for (const key of selected) {
+            const [deviceId, doorNo] = key.split(':');
+            if (!doorRights[deviceId]) doorRights[deviceId] = [];
+            doorRights[deviceId].push(Number(doorNo));
+        }
+        setSaving(true);
+        try {
+            await api.post('/access-levels', { name: name.trim(), description: description.trim(), doorRights });
+            toast.success('ACCESS LEVEL CREATED', { description: name.trim() });
+            setName('');
+            setDescription('');
+            setSelected([]);
+            await load();
+        } catch (e) {
+            toast.error('ACCESS LEVEL FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const remove = async (level) => {
+        try {
+            await api.delete(`/access-levels/${level.id}`);
+            toast.success('ACCESS LEVEL DELETED', { description: level.name });
+            await load();
+        } catch (e) {
+            toast.error('DELETE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        }
+    };
+
+    return (
+        <AnimatePresence>
+            {open && (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
+                    <motion.div
+                        initial={{ opacity: 0, y: 24, scale: 0.98 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: 24 }}
+                        className="relative w-full max-w-4xl rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8 max-h-[92vh] overflow-y-auto"
+                    >
+                        <div className="flex items-start justify-between gap-4">
+                            <div>
+                                <p className="mono text-[10px] tracking-[0.35em] text-sky-400">PHYSICAL ACCESS POLICY</p>
+                                <h2 className="font-display text-xl font-bold text-white mt-2">Access Levels</h2>
+                                <p className="text-xs text-slate-500 mt-1">Create a level and select exactly which doors or turnstiles it can open.</p>
+                            </div>
+                            <button onClick={onClose} className="rounded-full border border-white/10 p-2 text-slate-400 hover:bg-white/10 hover:text-white">
+                                <X size={15} />
+                            </button>
+                        </div>
+
+                        <div className="mt-6 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+                            <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <div>
+                                        <label className="mono text-[10px] tracking-widest text-slate-500">LEVEL NAME</label>
+                                        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. TECHNICIANS"
+                                            className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60" />
+                                    </div>
+                                    <div>
+                                        <label className="mono text-[10px] tracking-widest text-slate-500">DESCRIPTION</label>
+                                        <input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional"
+                                            className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60" />
+                                    </div>
+                                </div>
+
+                                <div className="mt-5">
+                                    <div className="flex items-center justify-between">
+                                        <p className="mono text-[10px] tracking-widest text-slate-500">ACCESS POINTS</p>
+                                        <p className="mono text-[9px] text-sky-400">{selected.length} SELECTED</p>
+                                    </div>
+                                    <div className="mt-3 grid gap-2 sm:grid-cols-2 max-h-[390px] overflow-y-auto pr-1">
+                                        {physicalDoors.map((door) => {
+                                            const key = `${door.gatewayDeviceId}:${door.doorNo}`;
+                                            const active = selected.includes(key);
+                                            return (
+                                                <button key={door.id || key} type="button" onClick={() => toggle(key)}
+                                                    className={`flex items-center justify-between rounded-lg border px-3 py-3 text-left transition-colors ${active ? 'border-emerald-400/50 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:border-sky-400/30'}`}>
+                                                    <div>
+                                                        <p className="text-xs font-semibold text-slate-200">{door.name}</p>
+                                                        <p className="mono text-[9px] text-slate-600 mt-1">{door.gatewayDeviceId} · DOOR {door.doorNo}</p>
+                                                    </div>
+                                                    <div className={`h-5 w-5 rounded border flex items-center justify-center ${active ? 'border-emerald-400 bg-emerald-400/20' : 'border-white/15'}`}>
+                                                        {active && <Check size={13} className="text-emerald-300" />}
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
+                                        {physicalDoors.length === 0 && (
+                                            <p className="sm:col-span-2 py-8 text-center mono text-[10px] text-slate-600">NO PHYSICAL DOORS AVAILABLE</p>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <button onClick={save} disabled={saving || !name.trim() || selected.length === 0}
+                                    className="mt-5 flex items-center gap-2 rounded-full bg-sky-500 px-5 py-2.5 font-head font-bold tracking-widest text-xs text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
+                                    {saving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                                    CREATE ACCESS LEVEL
+                                </button>
+                            </div>
+
+                            <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                                <p className="mono text-[10px] tracking-widest text-slate-500">EXISTING LEVELS</p>
+                                <div className="mt-3 space-y-2">
+                                    {levels.map((level) => {
+                                        const count = Object.values(level.doorRights || {}).reduce((n, arr) => n + (Array.isArray(arr) ? arr.length : 0), 0);
+                                        return (
+                                            <div key={level.id} className="rounded-lg border border-white/10 bg-white/[0.025] p-3">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-sm font-semibold text-slate-200">{level.name}</p>
+                                                        <p className="mono text-[9px] text-sky-400 mt-1">{count} ACCESS POINT{count === 1 ? '' : 'S'}</p>
+                                                        {level.description && <p className="text-xs text-slate-500 mt-1">{level.description}</p>}
+                                                    </div>
+                                                    <button onClick={() => remove(level)} className="rounded-md border border-red-400/20 p-2 text-red-300 hover:bg-red-500/10">
+                                                        <Trash2 size={13} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                    {levels.length === 0 && <p className="py-8 text-center mono text-[10px] text-slate-600">NO ACCESS LEVELS CREATED</p>}
+                                </div>
+                            </div>
+                        </div>
+                    </motion.div>
+                </motion.div>
+            )}
+        </AnimatePresence>
+    );
+}
+
+
 function EnrollModal({ open, onClose }) {
     const { addEmployee } = useSecurity();
     const [name, setName] = useState('');
     const [role, setRole] = useState('');
-    const [level, setLevel] = useState('L1 · GENERAL');
+    const [accessLevels, setAccessLevels] = useState([]);
+    const [accessLevelId, setAccessLevelId] = useState('');
     const [cardNo, setCardNo] = useState('');
     const [photo, setPhoto] = useState(null);
     const [photoPreview, setPhotoPreview] = useState(null);
@@ -52,6 +217,13 @@ function EnrollModal({ open, onClose }) {
     const [match, setMatch] = useState(null);
     const [saving, setSaving] = useState(false);
     const fileRef = useRef(null);
+
+    useEffect(() => {
+        if (!open) return;
+        api.get('/access-levels')
+            .then(({ data }) => setAccessLevels(data || []))
+            .catch(() => setAccessLevels([]));
+    }, [open]);
 
     useEffect(() => {
         if (faceState !== 'scanning') return;
@@ -70,7 +242,7 @@ function EnrollModal({ open, onClose }) {
     }, [faceState]);
 
     const reset = () => {
-        setName(''); setRole(''); setLevel('L1 · GENERAL'); setCardNo('');
+        setName(''); setRole(''); setAccessLevelId(''); setCardNo('');
         setPhoto(null);
         if (photoPreview) URL.revokeObjectURL(photoPreview);
         setPhotoPreview(null);
@@ -95,7 +267,17 @@ function EnrollModal({ open, onClose }) {
                 const { data } = await api.post('/upload/photo', fd);
                 photoPath = data.path;
             }
-            await addEmployee({ name: name.trim(), role: role.trim() || 'Staff Member', cardNo, faceSync: true, faceMatch: match, level, photoPath });
+            const selectedLevel = accessLevels.find((item) => item.id === accessLevelId);
+            await addEmployee({
+                name: name.trim(),
+                role: role.trim() || 'Staff Member',
+                cardNo,
+                faceSync: true,
+                faceMatch: match,
+                level: selectedLevel?.name || 'CUSTOM',
+                accessLevelId,
+                photoPath,
+            });
             toast.success('PROFILE SYNCHRONIZED', { description: `${name} saved to registry · ready to push to scanners` });
             reset();
             onClose();
@@ -106,7 +288,7 @@ function EnrollModal({ open, onClose }) {
         }
     };
 
-    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) && faceState === 'done';
+    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) && faceState === 'done' && !!accessLevelId;
 
     return (
         <AnimatePresence>
@@ -180,15 +362,16 @@ function EnrollModal({ open, onClose }) {
                                     <label className="mono text-[10px] tracking-widest text-slate-500">ACCESS LEVEL</label>
                                     <select
                                         data-testid="enroll-level-select"
-                                        value={level}
-                                        onChange={(e) => setLevel(e.target.value)}
+                                        value={accessLevelId}
+                                        onChange={(e) => setAccessLevelId(e.target.value)}
                                         className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60 transition-colors duration-200"
                                     >
-                                        <option>L1 · GENERAL</option>
-                                        <option>L2 · STAFF</option>
-                                        <option>L3 · RESTRICTED</option>
-                                        <option>L4 · COMMAND</option>
+                                        <option value="">SELECT ACCESS LEVEL</option>
+                                        {accessLevels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                                     </select>
+                                    {accessLevels.length === 0 && (
+                                        <p className="mt-2 mono text-[9px] tracking-wider text-orange-300">CREATE AN ACCESS LEVEL FIRST</p>
+                                    )}
                                 </div>
                                 <div>
                                     <label className="mono text-[10px] tracking-widest text-slate-500">CARD NUMBER · 10 DIGITS</label>
@@ -287,13 +470,27 @@ function EditEmployeeModal({ employee, onClose }) {
     const { updateEmployee } = useSecurity();
     const [name, setName] = useState(employee?.name || '');
     const [role, setRole] = useState(employee?.role || '');
-    const [level, setLevel] = useState(employee?.level || 'L1 · GENERAL');
+    const [accessLevels, setAccessLevels] = useState([]);
+    const [accessLevelId, setAccessLevelId] = useState(employee?.accessLevelId || '');
     const initialCards = employee?.cardNos?.length ? employee.cardNos : (employee?.cardNo ? [employee.cardNo] : []);
     const [cardsText, setCardsText] = useState(initialCards.join(', '));
     const [photo, setPhoto] = useState(null);
     const [photoPreview, setPhotoPreview] = useState(employee?.photoPath ? fileUrl(employee.photoPath) : null);
     const [saving, setSaving] = useState(false);
     const fileRef = useRef(null);
+
+    useEffect(() => {
+        api.get('/access-levels')
+            .then(({ data }) => {
+                const list = data || [];
+                setAccessLevels(list);
+                if (!accessLevelId && employee?.level) {
+                    const match = list.find((item) => item.name === employee.level);
+                    if (match) setAccessLevelId(match.id);
+                }
+            })
+            .catch(() => setAccessLevels([]));
+    }, [employee?.id]);
 
     const pickPhoto = (e) => {
         const file = e.target.files?.[0];
@@ -327,7 +524,8 @@ function EditEmployeeModal({ employee, onClose }) {
             await updateEmployee(employee.id, {
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
-                level,
+                level: accessLevels.find((item) => item.id === accessLevelId)?.name || employee?.level || 'CUSTOM',
+                accessLevelId,
                 cardNos: parsedCards,
                 cardNo: parsedCards[0] || '',
                 photoPath,
@@ -389,12 +587,10 @@ function EditEmployeeModal({ employee, onClose }) {
 
                     <div>
                         <label className="mono text-[10px] tracking-widest text-slate-500">ACCESS LEVEL</label>
-                        <select value={level} onChange={(e) => setLevel(e.target.value)}
+                        <select value={accessLevelId} onChange={(e) => setAccessLevelId(e.target.value)}
                             className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60">
-                            <option>L1 · GENERAL</option>
-                            <option>L2 · STAFF</option>
-                            <option>L3 · RESTRICTED</option>
-                            <option>L4 · COMMAND</option>
+                            <option value="">SELECT ACCESS LEVEL</option>
+                            {accessLevels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                         </select>
                     </div>
 
@@ -429,6 +625,7 @@ function EditEmployeeModal({ employee, onClose }) {
 export default function Employees() {
     const { employees, deleteEmployee } = useSecurity();
     const [open, setOpen] = useState(false);
+    const [accessLevelsOpen, setAccessLevelsOpen] = useState(false);
     const [editing, setEditing] = useState(null);
     const [query, setQuery] = useState('');
     const [faceFilter, setFaceFilter] = useState('all');
@@ -465,14 +662,23 @@ export default function Employees() {
     return (
         <div className="space-y-6" data-testid="employees-page">
             <PageHeader eyebrow={`PERSONNEL REGISTRY // ${employees ? `${employees.length} ACTIVE CREDENTIALS` : 'SYNCING…'}`} title="Employee Enrollment">
-                <button
-                    data-testid="enroll-open-btn"
-                    onClick={() => setOpen(true)}
-                    className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-3 font-head font-bold tracking-widest text-sm text-[#04121f] transition-colors duration-200 hover:bg-cyan-400"
-                >
-                    <UserPlus size={16} />
-                    ENROLL EMPLOYEE
-                </button>
+                <div className="flex flex-wrap gap-2">
+                    <button
+                        onClick={() => setAccessLevelsOpen(true)}
+                        className="flex items-center gap-2 rounded-full border border-sky-500/30 bg-sky-500/5 px-5 py-3 font-head font-bold tracking-widest text-xs text-sky-300 transition-colors hover:bg-sky-500/10"
+                    >
+                        <ShieldCheck size={16} />
+                        ACCESS LEVELS
+                    </button>
+                    <button
+                        data-testid="enroll-open-btn"
+                        onClick={() => setOpen(true)}
+                        className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-3 font-head font-bold tracking-widest text-sm text-[#04121f] transition-colors duration-200 hover:bg-cyan-400"
+                    >
+                        <UserPlus size={16} />
+                        ENROLL EMPLOYEE
+                    </button>
+                </div>
             </PageHeader>
 
             <div className="aegis-panel rounded-xl p-4 sm:p-5">
@@ -626,6 +832,7 @@ export default function Employees() {
                 </div>
             )}
 
+            <AccessLevelsModal open={accessLevelsOpen} onClose={() => setAccessLevelsOpen(false)} />
             <EnrollModal open={open} onClose={() => setOpen(false)} />
             <AnimatePresence>
                 {editing && <EditEmployeeModal employee={editing} onClose={() => setEditing(null)} />}
