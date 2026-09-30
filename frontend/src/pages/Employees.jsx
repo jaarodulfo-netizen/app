@@ -490,7 +490,7 @@ function EditEmployeeModal({ employee, onClose }) {
                 }
             })
             .catch(() => setAccessLevels([]));
-    }, [employee?.id]);
+    }, [employee?.id, employee?.level, accessLevelId]);
 
     const pickPhoto = (e) => {
         const file = e.target.files?.[0];
