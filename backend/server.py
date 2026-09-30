@@ -139,6 +139,7 @@ class EmployeeIn(BaseModel):
     level: str = "L1 · GENERAL"
     photoPath: Optional[str] = None
     doorRights: Optional[dict] = None
+    accessLevelId: Optional[str] = None
 
 
 class EmployeeUpdate(BaseModel):
@@ -151,6 +152,14 @@ class EmployeeUpdate(BaseModel):
     faceMatch: Optional[str] = None
     level: Optional[str] = None
     photoPath: Optional[str] = None
+    doorRights: Optional[dict] = None
+    accessLevelId: Optional[str] = None
+
+
+class AccessLevelIn(BaseModel):
+    name: str
+    description: str = ""
+    doorRights: dict = {}
 
 
 class CameraIn(BaseModel):
@@ -1359,6 +1368,150 @@ async def place_door(item_id: str, body: DoorPlacement, user=Depends(get_current
 
 # --- Registry: employees / cameras / devices / doors ---
 
+def normalize_door_rights(raw: Optional[dict]) -> dict:
+    rights = {}
+    if not isinstance(raw, dict):
+        return rights
+    for device_id, door_numbers in raw.items():
+        if not isinstance(door_numbers, list):
+            continue
+        clean = []
+        for number in door_numbers:
+            try:
+                n = int(number)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= n <= 99 and n not in clean:
+                clean.append(n)
+        if clean:
+            rights[str(device_id)] = clean
+    return rights
+
+
+async def resolve_employee_door_rights(access_level_id: Optional[str], explicit: Optional[dict]) -> tuple[dict, Optional[dict]]:
+    if access_level_id:
+        try:
+            level = await db.access_levels.find_one({"_id": ObjectId(access_level_id)})
+        except Exception:
+            level = None
+        if not level:
+            raise HTTPException(status_code=400, detail="Selected access level no longer exists")
+        return normalize_door_rights(level.get("doorRights")), level
+    return normalize_door_rights(explicit), None
+
+
+async def sync_employee_to_gateway(employee: dict):
+    cards = employee.get("cardNos")
+    if not isinstance(cards, list):
+        cards = [employee.get("cardNo")] if employee.get("cardNo") else []
+    cards = [str(c).strip() for c in cards if str(c or "").strip()]
+    credentials = [{"type": "card", "value": c} for c in cards]
+    if employee.get("photoPath"):
+        try:
+            photo_bytes, _ = await get_object(employee["photoPath"])
+            credentials.append({"type": "face", "imageBase64": base64.b64encode(photo_bytes).decode("ascii")})
+        except Exception as e:
+            logger.warning("Could not attach enrollment face photo: %s", e)
+
+    person_id = str(employee.get("personId") or employee.get("_id"))
+    return await send_gateway_command({
+        "kind": "person.upsert",
+        "person": {
+            "id": person_id,
+            "name": str(employee.get("name") or "").strip(),
+            "userType": "normal",
+            "doorRights": normalize_door_rights(employee.get("doorRights")),
+        },
+        "credentials": credentials,
+    })
+
+
+@api_router.get("/access-levels")
+async def list_access_levels(user=Depends(get_current_user)):
+    docs = await db.access_levels.find().sort("name", 1).to_list(200)
+    return [doc_id(d) for d in docs]
+
+
+@api_router.post("/access-levels")
+async def create_access_level(body: AccessLevelIn, user=Depends(get_current_user)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Access level name is required")
+    if await db.access_levels.find_one({"name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}}):
+        raise HTTPException(status_code=409, detail="An access level with this name already exists")
+    rights = normalize_door_rights(body.doorRights)
+    if not rights:
+        raise HTTPException(status_code=400, detail="Select at least one physical access point")
+    doc = {
+        "name": name,
+        "description": body.description.strip(),
+        "doorRights": rights,
+        "created_at": datetime.now(timezone.utc),
+        "created_by": user["email"],
+    }
+    r = await db.access_levels.insert_one(doc)
+    doc["_id"] = r.inserted_id
+    return doc_id(doc)
+
+
+@api_router.put("/access-levels/{item_id}")
+async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(get_current_user)):
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid access level id")
+    name = body.name.strip()
+    rights = normalize_door_rights(body.doorRights)
+    if not name or not rights:
+        raise HTTPException(status_code=400, detail="Name and at least one access point are required")
+    await db.access_levels.update_one(
+        {"_id": oid},
+        {"$set": {
+            "name": name,
+            "description": body.description.strip(),
+            "doorRights": rights,
+            "updated_at": datetime.now(timezone.utc),
+            "updated_by": user["email"],
+        }},
+    )
+    level = await db.access_levels.find_one({"_id": oid})
+    if not level:
+        raise HTTPException(status_code=404, detail="Access level not found")
+
+    employees = await db.employees.find({"accessLevelId": item_id}).to_list(500)
+    for employee in employees:
+        await db.employees.update_one(
+            {"_id": employee["_id"]},
+            {"$set": {"level": name, "doorRights": rights, "hardwareSync": "pending"}},
+        )
+        employee["level"] = name
+        employee["doorRights"] = rights
+        try:
+            await sync_employee_to_gateway(employee)
+            await db.employees.update_one(
+                {"_id": employee["_id"]},
+                {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": datetime.now(timezone.utc)}},
+            )
+        except Exception as e:
+            logger.warning("Access-level resync failed for %s: %s", employee.get("name"), e)
+
+    return doc_id(level)
+
+
+@api_router.delete("/access-levels/{item_id}")
+async def delete_access_level(item_id: str, user=Depends(get_current_user)):
+    if await db.employees.find_one({"accessLevelId": item_id}):
+        raise HTTPException(status_code=409, detail="This access level is assigned to one or more employees")
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid access level id")
+    result = await db.access_levels.delete_one({"_id": oid})
+    if not result.deleted_count:
+        raise HTTPException(status_code=404, detail="Access level not found")
+    return {"ok": True}
+
+
 @api_router.get("/employees")
 async def list_employees(user=Depends(get_current_user)):
     docs = await db.employees.find().sort("created_at", -1).to_list(500)
@@ -1373,33 +1526,36 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     if await db.employees.find_one({"cardNo": card_no}):
         raise HTTPException(status_code=409, detail="This card number is already assigned")
 
+    door_rights, access_level = await resolve_employee_door_rights(body.accessLevelId, body.doorRights)
+    if not door_rights:
+        raise HTTPException(status_code=400, detail="Select an access level with at least one access point")
+
     doc = body.model_dump()
     doc["cardNo"] = card_no
+    doc["cardNos"] = [card_no]
+    doc["doorRights"] = door_rights
+    if access_level:
+        doc["level"] = access_level.get("name") or body.level
+        doc["accessLevelId"] = str(access_level["_id"])
     doc["created_at"] = datetime.now(timezone.utc)
     doc["created_by"] = user["email"]
+    doc["hardwareSync"] = "pending"
     r = await db.employees.insert_one(doc)
     doc["_id"] = r.inserted_id
 
-    person_id = str(r.inserted_id)
-    credentials = [{"type": "card", "value": card_no}]
-    if body.photoPath:
-        try:
-            photo_bytes, _ = await get_object(body.photoPath)
-            credentials.append({"type": "face", "imageBase64": base64.b64encode(photo_bytes).decode("ascii")})
-        except Exception as e:
-            logger.warning("Could not attach enrollment face photo: %s", e)
-    await send_gateway_command({
-        "kind": "person.upsert",
-        "person": {
-            "id": person_id,
-            "name": body.name.strip(),
-            "userType": "normal",
-            "doorRights": body.doorRights or None,
-        },
-        "credentials": credentials,
-    })
-    await db.employees.update_one({"_id": r.inserted_id}, {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": datetime.now(timezone.utc)}})
+    try:
+        await sync_employee_to_gateway(doc)
+    except Exception:
+        await db.employees.delete_one({"_id": r.inserted_id})
+        raise
+
+    synced_at = datetime.now(timezone.utc)
+    await db.employees.update_one(
+        {"_id": r.inserted_id},
+        {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": synced_at}},
+    )
     doc["hardwareSync"] = "synced"
+    doc["hardwareSyncedAt"] = synced_at
     return doc_id(doc)
 
 
@@ -1438,10 +1594,37 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
         if not updates["name"]:
             raise HTTPException(status_code=400, detail="Name is required")
 
+    if "accessLevelId" in updates:
+        rights, access_level = await resolve_employee_door_rights(updates.get("accessLevelId"), updates.get("doorRights"))
+        if access_level:
+            updates["level"] = access_level.get("name") or updates.get("level") or existing.get("level")
+            updates["accessLevelId"] = str(access_level["_id"])
+        updates["doorRights"] = rights
+    elif "doorRights" in updates:
+        updates["doorRights"] = normalize_door_rights(updates.get("doorRights"))
+
     updates["updated_at"] = datetime.now(timezone.utc)
     updates["updated_by"] = user["email"]
+    updates["hardwareSync"] = "pending"
     await db.employees.update_one({"_id": oid}, {"$set": updates})
     doc = await db.employees.find_one({"_id": oid})
+
+    try:
+        await sync_employee_to_gateway(doc)
+    except Exception as e:
+        await db.employees.update_one(
+            {"_id": oid},
+            {"$set": {"hardwareSync": "error", "hardwareSyncError": str(e)}},
+        )
+        raise HTTPException(status_code=502, detail=f"Employee saved, but hardware sync failed: {e}")
+
+    synced_at = datetime.now(timezone.utc)
+    await db.employees.update_one(
+        {"_id": oid},
+        {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": synced_at}, "$unset": {"hardwareSyncError": ""}},
+    )
+    doc["hardwareSync"] = "synced"
+    doc["hardwareSyncedAt"] = synced_at
     return doc_id(doc)
 
 
