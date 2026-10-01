@@ -29,6 +29,8 @@ function BootScreen() {
 }
 
 function Console() {
+    const detachedWall = new URLSearchParams(window.location.search).get('detached') === '1';
+
     useEffect(() => {
         const lenis = new Lenis({ duration: 1.1, smoothWheel: true });
         let raf;
@@ -42,6 +44,18 @@ function Console() {
             lenis.destroy();
         };
     }, []);
+
+    if (detachedWall) {
+        return (
+            <SecurityProvider>
+                <div className="min-h-screen bg-black">
+                    <Routes>
+                        <Route path="/feeds" element={<LiveFeeds />} />
+                    </Routes>
+                </div>
+            </SecurityProvider>
+        );
+    }
 
     return (
         <SecurityProvider>
