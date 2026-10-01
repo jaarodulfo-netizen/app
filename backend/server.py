@@ -1656,6 +1656,48 @@ async def create_camera(body: CameraIn, user=Depends(get_current_user)):
     return doc_id(doc)
 
 
+@api_router.get("/cameras/{camera_id}/snapshot")
+async def camera_snapshot(camera_id: str, user=Depends(get_current_user)):
+    try:
+        oid = ObjectId(camera_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid camera id")
+
+    cam = await db.cameras.find_one({"_id": oid})
+    if not cam:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not cam.get("nvrIp") or not cam.get("channelNo"):
+        raise HTTPException(status_code=400, detail="Camera is not linked to a synced NVR channel")
+
+    result = await send_gateway_command({
+        "kind": "nvr.snapshot",
+        "nvr": {
+            "id": cam.get("nvr") or "",
+            "name": cam.get("nvrName") or "NVR",
+            "ip": cam.get("nvrIp"),
+        },
+        "channelNo": int(cam.get("channelNo")),
+    })
+
+    if not isinstance(result, dict):
+        raise HTTPException(status_code=502, detail="Local gateway returned an invalid snapshot response")
+
+    encoded = result.get("imageBase64") or result.get("base64") or result.get("data")
+    if not encoded:
+        raise HTTPException(status_code=502, detail="Local gateway did not return a camera snapshot")
+
+    try:
+        image_bytes = base64.b64decode(encoded)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Local gateway returned an invalid snapshot payload")
+
+    return Response(
+        content=image_bytes,
+        media_type=result.get("contentType") or "image/jpeg",
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
+
+
 @api_router.delete("/cameras/{item_id}")
 async def delete_camera(item_id: str, user=Depends(get_current_user)):
     r = await db.cameras.delete_one({"_id": ObjectId(item_id)})
