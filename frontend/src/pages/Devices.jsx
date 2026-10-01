@@ -4,6 +4,7 @@ import { Network, HardDrive, ScanFace, Nfc, RefreshCw, Plus, Trash2, X, Loader2,
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
+import { api } from '../context/AuthContext';
 
 const TYPE_META = {
     gateway: { label: 'GATEWAYS', icon: Network },
