@@ -192,6 +192,7 @@ class DoorIn(BaseModel):
     deviceId: Optional[str] = None
     gatewayDeviceId: Optional[str] = None
     doorNo: Optional[int] = None
+    visible: bool = True
 
 
 class DoorUpdate(BaseModel):
@@ -204,6 +205,7 @@ class DoorUpdate(BaseModel):
     deviceId: Optional[str] = None
     gatewayDeviceId: Optional[str] = None
     doorNo: Optional[int] = None
+    visible: Optional[bool] = None
 
 
 class DoorPlacement(BaseModel):
@@ -2322,6 +2324,7 @@ async def seed_kerma_doors():
                 "gatewayDeviceId": gateway_device_id,
                 "doorNo": int(door_no),
                 "hardwareLinked": True,
+                "visible": True,
                 "code": f"D-{seq:02d}",
                 "status": "locked",
                 "created_at": datetime.now(timezone.utc),
