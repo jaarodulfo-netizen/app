@@ -40,12 +40,13 @@ function DeleteButton({ onConfirm, testid }) {
 }
 
 function AccessLevelsModal({ open, onClose }) {
-    const { doors } = useSecurity();
+    const { doors, devices, updateDoor } = useSecurity();
     const [levels, setLevels] = useState([]);
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
     const [selected, setSelected] = useState([]);
     const [saving, setSaving] = useState(false);
+    const [doorSaving, setDoorSaving] = useState(null);
 
     const load = async () => {
         try {
@@ -60,7 +61,49 @@ function AccessLevelsModal({ open, onClose }) {
         if (open) load();
     }, [open]);
 
-    const physicalDoors = (doors || []).filter((d) => d.gatewayDeviceId && d.doorNo);
+    const gatewayDeviceMap = Object.fromEntries(
+        (devices || []).filter((d) => d.gatewayDeviceId).map((d) => [d.gatewayDeviceId, d]),
+    );
+    const physicalDoors = (doors || []).filter((d) => d.gatewayDeviceId && d.doorNo && d.visible !== false);
+    const controllerDoors = (doors || []).filter(
+        (d) => d.gatewayDeviceId && d.doorNo && gatewayDeviceMap[d.gatewayDeviceId]?.type === 'card',
+    );
+    const controllerGroups = controllerDoors.reduce((groups, door) => {
+        const key = door.gatewayDeviceId;
+        if (!groups[key]) groups[key] = [];
+        groups[key].push(door);
+        return groups;
+    }, {});
+
+    const saveDoorName = async (door, value) => {
+        const nextName = String(value || '').trim();
+        if (!nextName || nextName === door.name) return;
+        setDoorSaving(door.id);
+        try {
+            await updateDoor(door.id, { name: nextName });
+            toast.success('DOOR NAME UPDATED', { description: nextName });
+        } catch (e) {
+            toast.error('DOOR UPDATE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally {
+            setDoorSaving(null);
+        }
+    };
+
+    const setDoorVisible = async (door, visible) => {
+        setDoorSaving(door.id);
+        try {
+            await updateDoor(door.id, { visible });
+            if (!visible) {
+                const key = `${door.gatewayDeviceId}:${door.doorNo}`;
+                setSelected((prev) => prev.filter((x) => x !== key));
+            }
+            toast.success(visible ? 'DOOR UNHIDDEN' : 'DOOR HIDDEN', { description: door.name });
+        } catch (e) {
+            toast.error('DOOR UPDATE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally {
+            setDoorSaving(null);
+        }
+    };
 
     const toggle = (key) => {
         setSelected((prev) => prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]);
@@ -193,6 +236,78 @@ function AccessLevelsModal({ open, onClose }) {
                                     })}
                                     {levels.length === 0 && <p className="py-8 text-center mono text-[10px] text-slate-600">NO ACCESS LEVELS CREATED</p>}
                                 </div>
+                            </div>
+                        </div>
+
+                        <div className="mt-6 rounded-xl border border-white/10 bg-black/20 p-4">
+                            <div className="flex items-start justify-between gap-4">
+                                <div>
+                                    <p className="mono text-[10px] tracking-widest text-slate-500">CONTROLLER DOOR LABELS</p>
+                                    <p className="text-xs text-slate-500 mt-1">Rename physical controller doors for HR and hide unused outputs. Hidden doors stay linked to the controller but disappear from Access Levels.</p>
+                                </div>
+                                <span className="mono text-[9px] text-sky-400">{controllerDoors.filter((d) => d.visible !== false).length} VISIBLE</span>
+                            </div>
+
+                            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                                {Object.entries(controllerGroups).map(([gatewayDeviceId, groupDoors]) => {
+                                    const device = gatewayDeviceMap[gatewayDeviceId];
+                                    const orderedDoors = [...groupDoors].sort((a, b) => Number(a.doorNo) - Number(b.doorNo));
+                                    return (
+                                        <div key={gatewayDeviceId} className="rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-slate-200">{device?.name || gatewayDeviceId}</p>
+                                                    <p className="mono text-[9px] text-slate-600 mt-1">{gatewayDeviceId}</p>
+                                                </div>
+                                                <span className="mono text-[9px] text-slate-500">{orderedDoors.filter((d) => d.visible !== false).length}/{orderedDoors.length} SHOWN</span>
+                                            </div>
+
+                                            <div className="mt-3 space-y-2">
+                                                {orderedDoors.map((door) => {
+                                                    const visible = door.visible !== false;
+                                                    const busy = doorSaving === door.id;
+                                                    return (
+                                                        <div key={door.id} className={`rounded-lg border px-3 py-2.5 ${visible ? 'border-white/10 bg-black/20' : 'border-amber-400/20 bg-amber-400/[0.04]'}`}>
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="w-14 shrink-0">
+                                                                    <p className="mono text-[9px] text-slate-600">DOOR</p>
+                                                                    <p className="text-sm font-bold text-slate-300">{door.doorNo}</p>
+                                                                </div>
+                                                                <input
+                                                                    key={`${door.id}:${door.name}`}
+                                                                    defaultValue={door.name}
+                                                                    disabled={busy}
+                                                                    onBlur={(e) => saveDoorName(door, e.target.value)}
+                                                                    onKeyDown={(e) => {
+                                                                        if (e.key === 'Enter') e.currentTarget.blur();
+                                                                        if (e.key === 'Escape') {
+                                                                            e.currentTarget.value = door.name;
+                                                                            e.currentTarget.blur();
+                                                                        }
+                                                                    }}
+                                                                    className="min-w-0 flex-1 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-sky-400/60 disabled:opacity-50"
+                                                                    aria-label={`Friendly name for ${device?.name || gatewayDeviceId} door ${door.doorNo}`}
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    disabled={busy}
+                                                                    onClick={() => setDoorVisible(door, !visible)}
+                                                                    className={`min-w-[82px] rounded-md border px-2.5 py-2 mono text-[9px] tracking-wider transition-colors disabled:opacity-40 ${visible ? 'border-white/10 text-slate-400 hover:text-amber-300 hover:border-amber-400/30' : 'border-emerald-400/25 text-emerald-300 hover:bg-emerald-400/10'}`}
+                                                                >
+                                                                    {busy ? 'SAVING' : visible ? 'HIDE' : 'UNHIDE'}
+                                                                </button>
+                                                            </div>
+                                                            {!visible && <p className="mt-1.5 mono text-[8px] text-amber-300/70">HIDDEN FROM HR ACCESS SELECTION</p>}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                                {controllerDoors.length === 0 && (
+                                    <p className="lg:col-span-2 py-8 text-center mono text-[10px] text-slate-600">NO CONTROLLER DOORS AVAILABLE</p>
+                                )}
                             </div>
                         </div>
                     </motion.div>
