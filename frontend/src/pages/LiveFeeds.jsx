@@ -172,10 +172,71 @@ function LivePlayer({ cam, autoStart = false }) {
     );
 }
 
+function GatewaySnapshot({ cam, large = false }) {
+    const [src, setSrc] = useState('');
+    const [err, setErr] = useState('');
+    const objectUrlRef = useRef('');
+    const timerRef = useRef(null);
+
+    const load = async () => {
+        try {
+            const { data } = await api.get(`/cameras/${cam.id}/snapshot`, { responseType: 'blob' });
+            const nextUrl = URL.createObjectURL(data);
+            if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+            objectUrlRef.current = nextUrl;
+            setSrc(nextUrl);
+            setErr('');
+        } catch (e) {
+            setErr(formatApiError(e.response?.data?.detail) || 'Snapshot unavailable');
+        }
+    };
+
+    useEffect(() => {
+        const initialDelay = large ? 0 : Math.min(((cam.channelNo || 1) % 24) * 250, 5000);
+        const first = setTimeout(() => {
+            load();
+            timerRef.current = setInterval(load, large ? 1200 : 10000);
+        }, initialDelay);
+
+        return () => {
+            clearTimeout(first);
+            clearInterval(timerRef.current);
+            if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [cam.id, large]);
+
+    return (
+        <div className="absolute inset-0 bg-black">
+            {src ? (
+                <img
+                    src={src}
+                    alt={cam.label}
+                    className="absolute inset-0 h-full w-full object-cover"
+                />
+            ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-grid">
+                    {err ? <CircleAlert size={large ? 28 : 20} className="text-red-400/70" /> : <Loader2 size={large ? 28 : 20} className="animate-spin text-sky-400/60" />}
+                    <p className={`mono tracking-[0.25em] ${err ? 'text-red-300' : 'text-sky-300'} ${large ? 'text-xs' : 'text-[9px]'}`}>
+                        {err ? 'SNAPSHOT UNAVAILABLE' : 'LOADING CAMERA'}
+                    </p>
+                    {err && <p className="mono text-[8px] tracking-wider text-slate-600 text-center px-4">{err}</p>}
+                </div>
+            )}
+            {src && !large && (
+                <span className="absolute left-3 top-9 z-10 mono text-[8px] tracking-widest text-sky-300 border border-sky-400/30 bg-black/60 rounded px-1.5 py-0.5">
+                    SECURE GATEWAY PREVIEW
+                </span>
+            )}
+        </div>
+    );
+}
+
 function CamTile({ cam, onZoom, onDelete, large = false }) {
     const now = useNow(1000);
     const live = cam.status === 'live';
     const hasStream = Boolean(cam.rtsp);
+    const hasGatewayPreview = cam.source === 'nvr-sync' && Boolean(cam.nvrIp) && Boolean(cam.channelNo);
     return (
         <div
             data-testid={`cam-tile-${(cam.code || 'x').toLowerCase()}`}
@@ -186,6 +247,8 @@ function CamTile({ cam, onZoom, onDelete, large = false }) {
         >
             {hasStream ? (
                 <LivePlayer cam={cam} autoStart={large} />
+            ) : hasGatewayPreview ? (
+                <GatewaySnapshot cam={cam} large={large} />
             ) : cam.img ? (
                 <>
                     <img
