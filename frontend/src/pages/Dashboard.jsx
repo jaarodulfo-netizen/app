@@ -3,8 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { motion, animate } from 'framer-motion';
 import { Users, DoorOpen, Video, AlertTriangle, ArrowRight, ScanFace, Activity, Cctv } from 'lucide-react';
 import { useSecurity } from '../context/SecurityContext';
-import { FloorPlan } from '../components/FloorPlan';
 import { EventsFeed } from '../components/EventsFeed';
+import { LiveAccessPhotoFeed } from '../components/LiveAccessPhotoFeed';
 import { MARQUEE_FALLBACK } from '../data/mockData';
 
 function AnimatedNumber({ value, pad = 0 }) {
@@ -163,7 +163,7 @@ export default function Dashboard() {
                             FULL LOG →
                         </Link>
                     </div>
-                    <EventsFeed limit={8} />
+                    <EventsFeed limit={5} />
                 </motion.div>
 
                 <motion.div
@@ -174,16 +174,18 @@ export default function Dashboard() {
                 >
                     <div className="aegis-panel rounded-xl p-5">
                         <div className="flex items-center justify-between mb-4">
-                            <h2 className="font-head font-bold tracking-wider text-slate-100">FLOOR 04 · DOOR GRID</h2>
-                            <button
-                                data-testid="mini-map-open-btn"
-                                onClick={() => navigate('/map')}
+                            <div>
+                                <p className="mono text-[9px] tracking-[0.28em] text-sky-400">CREDENTIAL ACTIVITY</p>
+                                <h2 className="mt-1 font-head font-bold tracking-wider text-slate-100">LIVE ACCESS</h2>
+                            </div>
+                            <Link
+                                to="/events"
                                 className="mono text-[10px] tracking-widest text-sky-400 hover:text-[#fee396] transition-colors duration-200"
                             >
-                                EXPAND →
-                            </button>
+                                FULL LOG →
+                            </Link>
                         </div>
-                        <FloorPlan doors={doors} compact onSelect={() => navigate('/map')} />
+                        <LiveAccessPhotoFeed limit={5} />
                     </div>
 
                     <div className="aegis-panel rounded-xl p-5">
