@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion, animate } from 'framer-motion';
-import { Users, DoorOpen, Video, AlertTriangle, ArrowRight, ScanFace, Activity, Cctv } from 'lucide-react';
+import { Users, DoorOpen, Video, AlertTriangle, ArrowRight, ScanFace, Cctv, WifiOff, HardDrive, Network, Nfc } from 'lucide-react';
 import { useSecurity } from '../context/SecurityContext';
-import { EventsFeed } from '../components/EventsFeed';
 import { LiveAccessPhotoFeed } from '../components/LiveAccessPhotoFeed';
 import { MARQUEE_FALLBACK } from '../data/mockData';
 
@@ -27,6 +26,20 @@ export default function Dashboard() {
     const alarms = doors.filter((d) => d.status === 'alarm').length;
     const devList = devices || [];
     const devOnline = devList.filter((d) => d.status === 'online').length;
+    const problemDevices = devList
+        .filter((d) => d.status !== 'online')
+        .sort((a, b) => {
+            const rank = { offline: 0, degraded: 1 };
+            return (rank[a.status] ?? 2) - (rank[b.status] ?? 2);
+        });
+
+    const deviceIcon = (type) => {
+        if (type === 'nvr') return HardDrive;
+        if (type === 'gateway') return Network;
+        if (type === 'face') return ScanFace;
+        if (type === 'card') return Nfc;
+        return WifiOff;
+    };
 
     const STATS = [
         { id: 'people', label: 'ENROLLED PERSONNEL', value: enrolled, icon: Users, accent: 'text-sky-300', bar: 'from-sky-500 to-cyan-400', pct: enrolled ? 100 : 0 },
@@ -156,14 +169,70 @@ export default function Dashboard() {
                 >
                     <div className="flex items-center justify-between px-5 py-4 border-b border-white/5">
                         <div className="flex items-center gap-2.5">
-                            <Activity size={15} className="text-sky-400" />
-                            <h2 className="font-head font-bold tracking-wider text-slate-100">LIVE ACCESS EVENTS</h2>
+                            <WifiOff size={15} className={problemDevices.length ? 'text-red-400' : 'text-emerald-400'} />
+                            <div>
+                                <p className="mono text-[9px] tracking-[0.28em] text-slate-600">SYSTEM HEALTH</p>
+                                <h2 className="font-head font-bold tracking-wider text-slate-100">DEVICES REQUIRING ATTENTION</h2>
+                            </div>
                         </div>
-                        <Link to="/events" data-testid="view-all-events-link" className="mono text-[10px] tracking-widest text-sky-400 hover:text-[#fee396] transition-colors duration-200">
-                            FULL LOG →
+                        <Link to="/devices" className="mono text-[10px] tracking-widest text-sky-400 hover:text-[#fee396] transition-colors duration-200">
+                            MANAGE DEVICES →
                         </Link>
                     </div>
-                    <EventsFeed limit={5} />
+
+                    {problemDevices.length === 0 ? (
+                        <div className="px-6 py-12 flex flex-col items-center justify-center text-center">
+                            <div className="h-12 w-12 rounded-full border border-emerald-400/25 bg-emerald-400/10 flex items-center justify-center">
+                                <Network size={22} className="text-emerald-300" />
+                            </div>
+                            <p className="mt-4 font-head font-bold tracking-wider text-emerald-300">ALL REGISTERED DEVICES ONLINE</p>
+                            <p className="mt-2 mono text-[10px] tracking-widest text-slate-600">
+                                {devOnline}/{devList.length} HARDWARE NODES REPORTING NORMALLY
+                            </p>
+                        </div>
+                    ) : (
+                        <div className="grid sm:grid-cols-2 gap-3 p-4">
+                            {problemDevices.slice(0, 8).map((d) => {
+                                const DeviceIcon = deviceIcon(d.type);
+                                const offline = d.status === 'offline';
+                                return (
+                                    <Link
+                                        key={d.id}
+                                        to="/devices"
+                                        className={`group rounded-xl border p-4 transition-colors duration-200 ${
+                                            offline
+                                                ? 'border-red-400/35 bg-red-500/[0.06] hover:border-red-400/60'
+                                                : 'border-orange-400/30 bg-orange-400/[0.05] hover:border-orange-400/55'
+                                        }`}
+                                    >
+                                        <div className="flex items-start gap-3">
+                                            <div className={`h-10 w-10 rounded-lg border flex items-center justify-center shrink-0 ${
+                                                offline
+                                                    ? 'border-red-400/30 bg-red-500/10'
+                                                    : 'border-orange-400/30 bg-orange-400/10'
+                                            }`}>
+                                                <DeviceIcon size={18} className={offline ? 'text-red-300' : 'text-orange-300'} />
+                                            </div>
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <p className="text-sm font-semibold text-slate-100 truncate">{d.name}</p>
+                                                    <span className={`mono text-[9px] tracking-widest shrink-0 ${offline ? 'text-red-300' : 'text-orange-300'}`}>
+                                                        {String(d.status || 'unknown').toUpperCase()}
+                                                    </span>
+                                                </div>
+                                                <p className="mt-1 mono text-[10px] tracking-wider text-slate-500 truncate">
+                                                    {String(d.type || 'device').toUpperCase()} · {d.ip || 'NO IP'}
+                                                </p>
+                                                <p className="mt-2 mono text-[9px] tracking-wider text-slate-600 truncate">
+                                                    {d.detail || (offline ? 'DEVICE IS NOT RESPONDING' : 'DEVICE REPORTING DEGRADED HEALTH')}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    </Link>
+                                );
+                            })}
+                        </div>
+                    )}
                 </motion.div>
 
                 <motion.div
