@@ -2373,6 +2373,7 @@ KERMA_DEVICE_SEED = [
     {"type": "card", "name": "1st Floor 2nd AC", "gatewayDeviceId": "1st-floor-2nd-ac", "doors": [1,2,3,4], "ip": "192.168.3.116", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
     {"type": "nvr", "name": "NVR 1", "ip": "192.168.3.101", "fw": "", "detail": "DS-7732NI-M4/16P · HTTP 80 · RTSP 554", "signal": 95},
     {"type": "nvr", "name": "NVR 2", "ip": "192.168.3.102", "fw": "", "detail": "DS-7732NXI-I4/16P · HTTP 80 · RTSP 554", "signal": 95},
+    {"type": "nvr", "name": "NVR 3", "ip": "192.168.3.103", "fw": "", "detail": "Hikvision NVR · HTTP 80 · RTSP 554", "signal": 95},
 ]
 
 
