@@ -1058,28 +1058,72 @@ gateway_pending: dict[str, asyncio.Future] = {}
 async def gateway_event_doc(event: dict) -> dict:
     when = parse_time(event.get("time"))
     card_no = str(event.get("cardNo")) if event.get("cardNo") is not None else None
-    person = event.get("personName") or event.get("personId")
-    if card_no and not person:
+
+    # Resolve the human-readable employee name for both CARD and FACE events.
+    # Hikvision facial events commonly send only personId/employeeNo, which
+    # previously caused attendance to be stored under the numeric ID.
+    person_id = str(event.get("personId") or event.get("employeeNo") or event.get("employeeNoString") or "").strip()
+    person = str(event.get("personName") or "").strip() or None
+    employee = None
+    if person_id:
+        employee = await db.employees.find_one({
+            "$or": [
+                {"personId": person_id},
+                {"employeeNo": person_id},
+                {"employeeNoString": person_id},
+            ]
+        })
+    if not employee and card_no:
         employee = await db.employees.find_one({"$or": [{"cardNo": card_no}, {"cardNos": card_no}]})
-        if employee:
-            person = employee.get("name")
-    person = person or (("CARD " + card_no) if card_no else "UNKNOWN CREDENTIAL")
+    if employee:
+        person = employee.get("name") or person
+    person = person or person_id or (("CARD " + card_no) if card_no else "UNKNOWN CREDENTIAL")
+
     gateway_device_id = event.get("deviceId")
     device_name = event.get("deviceName") or gateway_device_id or "UNKNOWN DEVICE"
     door_no = event.get("doorNo")
+
+    raw_detail = str(event.get("description") or "").strip()
+    desc = raw_detail.lower()
     outcome = str(event.get("outcome") or "status").lower().strip()
+
+    # Some Hikvision facial terminals report a successful face read as a
+    # generic/status event. Normalize those into granted access so the
+    # dedicated attendance terminal records an IN/OUT scan.
+    granted_markers = (
+        "access granted",
+        "authentication successful",
+        "authentication passed",
+        "verification successful",
+        "verification passed",
+        "face verified",
+        "face verification",
+        "face matched",
+        "match successful",
+        "valid card",
+        "success",
+    )
+    denied_markers = (
+        "access denied",
+        "authentication failed",
+        "verification failed",
+        "face mismatch",
+        "not authorized",
+        "expired card",
+        "card not found",
+        "failed",
+    )
     if outcome not in {"granted", "denied", "alarm", "status"}:
-        desc = str(event.get("description") or "").lower()
-        if any(x in desc for x in ("access granted", "authentication successful", "valid card")):
-            outcome = "granted"
-        elif any(x in desc for x in ("access denied", "authentication failed", "not authorized", "expired card", "card not found")):
+        outcome = "status"
+    if outcome == "status":
+        if any(x in desc for x in denied_markers):
             outcome = "denied"
+        elif any(x in desc for x in granted_markers):
+            outcome = "granted"
         elif "alarm" in desc or "abnormal" in desc:
             outcome = "alarm"
-        else:
-            outcome = "status"
+
     result = outcome
-    raw_detail = str(event.get("description") or "").strip()
     normalized_status_detail = {
         "exit button pressed": "BUTTON PRESSED",
         "exit button released": "BUTTON RELEASED",
@@ -1097,12 +1141,17 @@ async def gateway_event_doc(event: dict) -> dict:
     ).hexdigest()
     return {
         "person": person,
-        "personId": event.get("personId"),
+        "personId": person_id or None,
         "cardNo": card_no,
         "door": device_name if door_no is None else f"{device_name} · Door {door_no}",
         "doorCode": f"{gateway_device_id or 'device'}:{door_no or 1}",
         "zone": "",
-        "method": "FACE" if "face" in str(event.get("description", "")).lower() else ("CARD" if event.get("cardNo") else "OTHER"),
+        "method": "FACE" if (
+            str(event.get("method") or "").upper() == "FACE"
+            or "face" in desc
+            or "facial" in desc
+            or (person_id and not card_no)
+        ) else ("CARD" if card_no else "OTHER"),
         "result": result,
         "detail": detail,
         "time": when,
