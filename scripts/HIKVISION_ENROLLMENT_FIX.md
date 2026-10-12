@@ -29,7 +29,7 @@ also was not read back after the gateway acknowledged a command.
     "doorRights": {"device-id": [1]}
   },
   "credentials": [
-    {"type": "card", "value": "0008512258", "cardType": "normal"}
+    {"type": "card", "value": "0008512258", "cardType": "normalCard"}
   ]
 }
 ```
