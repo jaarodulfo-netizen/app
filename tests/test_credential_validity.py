@@ -56,7 +56,7 @@ def test_gateway_contract_explicitly_uses_normal_and_validity():
     tree = ast.parse(source)
     fn = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "sync_employee_to_gateway")
     compiled = ast.unparse(fn)
-    assert '"userType": "normal"' in compiled
-    assert '"Valid": validity' in compiled
-    assert '"cardType": "normal"' in compiled
+    assert "'userType': 'normal'" in compiled
+    assert "'Valid': validity" in compiled
+    assert "'cardType': 'normal'" in compiled
     assert 'doorRights' in compiled
