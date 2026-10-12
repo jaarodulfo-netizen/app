@@ -140,6 +140,8 @@ class EmployeeIn(BaseModel):
     photoPath: Optional[str] = None
     doorRights: Optional[dict] = None
     accessLevelId: Optional[str] = None
+    validFrom: Optional[str] = None
+    validUntil: Optional[str] = None
 
 
 class EmployeeUpdate(BaseModel):
@@ -154,6 +156,8 @@ class EmployeeUpdate(BaseModel):
     photoPath: Optional[str] = None
     doorRights: Optional[dict] = None
     accessLevelId: Optional[str] = None
+    validFrom: Optional[str] = None
+    validUntil: Optional[str] = None
 
 
 class AccessLevelIn(BaseModel):
@@ -1111,6 +1115,9 @@ async def gateway_event_doc(event: dict) -> dict:
         "not authorized",
         "expired card",
         "card not found",
+        "time invalid",
+        "invalid time",
+        "invalid time period",
         "failed",
     )
     if outcome not in {"granted", "denied", "alarm", "status"}:
@@ -1451,12 +1458,48 @@ async def resolve_employee_door_rights(access_level_id: Optional[str], explicit:
     return normalize_door_rights(explicit), None
 
 
+
+def resolve_credential_validity(valid_from: Optional[str], valid_until: Optional[str]) -> tuple[str, str, dict]:
+    """Validate an employee-specific three-year default in the Hikvision device's local time.
+
+    A blank date uses the current Monterrey calendar day. The default end is three
+    calendar years later; it is never a privilege or a schedule override.
+    """
+    local_today = datetime.now(ZoneInfo("America/Monterrey")).date()
+    try:
+        start = datetime.strptime(valid_from, "%Y-%m-%d").date() if valid_from else local_today
+        if valid_until:
+            end = datetime.strptime(valid_until, "%Y-%m-%d").date()
+        else:
+            try:
+                end = start.replace(year=start.year + 3)
+            except ValueError:
+                end = start.replace(year=start.year + 3, day=28)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Credential validity dates must be YYYY-MM-DD")
+
+    if start > end:
+        raise HTTPException(status_code=400, detail="Credential end date must not precede start date")
+    if end < local_today:
+        raise HTTPException(status_code=400, detail="Credential has already expired")
+    # ISAPI devices commonly cap dates at the end of 2037.
+    if end.isoformat() > "2037-12-31":
+        raise HTTPException(status_code=400, detail="Credential end date exceeds Hikvision's supported 2037 limit")
+
+    return start.isoformat(), end.isoformat(), {
+        "enable": True,
+        "beginTime": f"{start.isoformat()}T00:00:00",
+        "endTime": f"{end.isoformat()}T23:59:59",
+        "timeType": "local",
+    }
+
+
 async def sync_employee_to_gateway(employee: dict):
     cards = employee.get("cardNos")
     if not isinstance(cards, list):
         cards = [employee.get("cardNo")] if employee.get("cardNo") else []
     cards = [str(c).strip() for c in cards if str(c or "").strip()]
-    credentials = [{"type": "card", "value": c} for c in cards]
+    credentials = [{"type": "card", "value": c, "cardType": "normal"} for c in cards]
     if employee.get("photoPath"):
         try:
             photo_bytes, _ = await get_object(employee["photoPath"])
@@ -1464,6 +1507,7 @@ async def sync_employee_to_gateway(employee: dict):
         except Exception as e:
             logger.warning("Could not attach enrollment face photo: %s", e)
 
+    _, _, validity = resolve_credential_validity(employee.get("validFrom"), employee.get("validUntil"))
     person_id = str(employee.get("personId") or employee.get("_id"))
     return await send_gateway_command({
         "kind": "person.upsert",
@@ -1471,6 +1515,7 @@ async def sync_employee_to_gateway(employee: dict):
             "id": person_id,
             "name": str(employee.get("name") or "").strip(),
             "userType": "normal",
+            "Valid": validity,
             "doorRights": normalize_door_rights(employee.get("doorRights")),
         },
         "credentials": credentials,
@@ -1584,6 +1629,8 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     doc = body.model_dump()
     doc["cardNo"] = card_no
     doc["cardNos"] = [card_no]
+    doc["validFrom"], doc["validUntil"], _ = resolve_credential_validity(body.validFrom, body.validUntil)
+    doc["faceSync"] = False  # Photo submission is not proof of successful facial enrollment.
     doc["doorRights"] = door_rights
     if access_level:
         doc["level"] = access_level.get("name") or body.level
@@ -1603,9 +1650,9 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     synced_at = datetime.now(timezone.utc)
     await db.employees.update_one(
         {"_id": r.inserted_id},
-        {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": synced_at}},
+        {"$set": {"hardwareSync": "gateway_accepted", "hardwareSyncedAt": synced_at}},
     )
-    doc["hardwareSync"] = "synced"
+    doc["hardwareSync"] = "gateway_accepted"
     doc["hardwareSyncedAt"] = synced_at
     return doc_id(doc)
 
@@ -1654,6 +1701,12 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
     elif "doorRights" in updates:
         updates["doorRights"] = normalize_door_rights(updates.get("doorRights"))
 
+    updates["validFrom"], updates["validUntil"], _ = resolve_credential_validity(
+        updates.get("validFrom", existing.get("validFrom")),
+        updates.get("validUntil", existing.get("validUntil")),
+    )
+    # A new photo or request cannot prove a face was enrolled on a terminal.
+    updates["faceSync"] = False
     updates["updated_at"] = datetime.now(timezone.utc)
     updates["updated_by"] = user["email"]
     updates["hardwareSync"] = "pending"
@@ -1672,9 +1725,9 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
     synced_at = datetime.now(timezone.utc)
     await db.employees.update_one(
         {"_id": oid},
-        {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": synced_at}, "$unset": {"hardwareSyncError": ""}},
+        {"$set": {"hardwareSync": "gateway_accepted", "hardwareSyncedAt": synced_at}, "$unset": {"hardwareSyncError": ""}},
     )
-    doc["hardwareSync"] = "synced"
+    doc["hardwareSync"] = "gateway_accepted"
     doc["hardwareSyncedAt"] = synced_at
     return doc_id(doc)
 
