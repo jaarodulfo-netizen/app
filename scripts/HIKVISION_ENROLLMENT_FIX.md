@@ -58,6 +58,34 @@ level; **do not** copy this example's door permissions to other employees.
    No fallback to duress or unrestricted privileges.
 8. Record firmware-specific ISAPI error details without storing raw passwords.
 
+## Additional findings from Kerma Windows gateway logs
+
+- The installed gateway's `engine.upsertPerson` queues jobs and returns
+  `queuedFor` / `faceQueuedFor`. It does not confirm successful physical
+  enrollment. The cloud now records these as `hardwareSync: queued`.
+- Historical Windows logs show `NET_DVR_STDXMLConfig` parameter error 17
+  on some DS-K2804 controllers, including `restrooms`. Their enrollment
+  may require the native HCNetSDK `NET_DVR_SET_CARD` (2561) route.
+- The old ISAPI client used `person.doorRights?.[device.id] ?? device.doors`.
+  This **must not** be used on production controllers: if rights for a
+  controller are absent, a default `device.doors` may grant more doors
+  than requested. Require explicit assigned rights and fail closed.
+- `RightPlan` cannot be assumed to have an approved schedule simply
+  because template 1 exists. Confirm the plan's actual definition and
+  assignment on each access controller; do not automatically use 24/7
+  outside the existing access level.
+- Native SDK confirmation must verify `NET_DVR_CARD_STATUS` and perform a
+  readback (GET_CARD) before changing any device state to `verified`.
+  Hikvision documents `NET_DVR_SET_CARD` as command 2561, status values
+  1000 through 1004, and the return structure NET_DVR_CARD_STATUS.
+- Only change/rebuild the installed `src/` TypeScript implementation;
+  editing `dist/` alone can be overwritten by a later build.
+- To collect **read-only** per-device queue results from the Windows PC,
+  run `scripts/audit_gateway_windows.ps1 -CardNo YOUR_10_DIGIT_CARD`
+  from the gateway root. Do not include environment secrets in a report.
+
+Reference: https://open.hikvision.com/hardware/v2/%E6%8E%A5%E5%8F%A3%E5%AE%9A%E4%B9%89/NET_DVR_SendWithRecvRemoteConfig%28CARD%29.html
+
 ## Safe verification workflow
 
 Run the **read-only** `scripts/diagnose_hikvision_card.py` against one
