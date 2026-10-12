@@ -62,3 +62,52 @@ def test_gateway_contract_explicitly_uses_normal_and_validity():
     assert "'validTo': validity['endTime']" in compiled
     assert "'cardType': 'normalCard'" in compiled
     assert 'doorRights' in compiled
+
+
+def load_gateway_sync_function():
+    """Compile only the gateway sync function; no DB or hardware imports."""
+    source = Path(__file__).resolve().parents[1] / "backend" / "server.py"
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    fn = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "sync_employee_to_gateway")
+    norm = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "normalize_door_rights")
+    validity = load_validity_function()
+    scope = {"resolve_credential_validity": validity, "HTTPException": HTTPException}
+    exec(compile(ast.Module(body=[norm, fn], type_ignores=[]), str(source), "exec"), scope)
+    return scope
+
+
+def test_gateway_receipt_is_queued_and_not_synchronized():
+    import asyncio
+
+    scope = load_gateway_sync_function()
+    async def command(payload):
+        assert payload["person"]["validFrom"].endswith("T00:00:00")
+        assert payload["person"]["validTo"].endswith("T23:59:59")
+        assert payload["person"]["userType"] == "normal"
+        assert payload["person"]["doorRights"] == {"restrooms": [1]}
+        assert payload["credentials"][0]["value"] == "0008512258"
+        assert payload["credentials"][0]["cardType"] == "normalCard"
+        return {"queuedFor": ["restrooms"], "faceQueuedFor": []}
+    scope["send_gateway_command"] = command
+    result = asyncio.run(scope["sync_employee_to_gateway"]({
+        "personId": "test-employee", "name": "Test", "cardNos": ["0008512258"],
+        "doorRights": {"restrooms": [1]},
+        "validFrom": None, "validUntil": None,
+    }))
+    assert result["hardwareSync"] == "queued"
+    assert result["gatewayQueuedFor"] == ["restrooms"]
+
+
+def test_gateway_wrong_devices_fail_closed():
+    import asyncio
+
+    scope = load_gateway_sync_function()
+    async def command(payload):
+        return {"queuedFor": ["other-controller"], "faceQueuedFor": []}
+    scope["send_gateway_command"] = command
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(scope["sync_employee_to_gateway"]({
+            "personId": "test-employee", "name": "Test", "cardNos": ["0008512258"],
+            "doorRights": {"restrooms": [1]},
+        }))
+    assert exc.value.status_code == 502
