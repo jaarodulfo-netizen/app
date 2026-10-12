@@ -1509,7 +1509,7 @@ async def sync_employee_to_gateway(employee: dict):
 
     _, _, validity = resolve_credential_validity(employee.get("validFrom"), employee.get("validUntil"))
     person_id = str(employee.get("personId") or employee.get("_id"))
-    return await send_gateway_command({
+    response = await send_gateway_command({
         "kind": "person.upsert",
         "person": {
             "id": person_id,
@@ -1525,6 +1525,26 @@ async def sync_employee_to_gateway(employee: dict):
         },
         "credentials": credentials,
     })
+    # Windows gateway acknowledges only the *queue*, not device programming.
+    # Its result is {"queuedFor": [...], "faceQueuedFor": [...]}.
+    # Never treat this as proof that the card/face was installed or accepted.
+    if isinstance(response, dict) and isinstance(response.get("queuedFor"), list):
+        expected = set(normalize_door_rights(employee.get("doorRights")).keys())
+        queued = set(str(d) for d in response["queuedFor"])
+        if queued != expected:
+            raise HTTPException(
+                status_code=502,
+                detail="Gateway returned unexpected enrollment targets. Check the device sync queue.",
+            )
+        return {
+            "hardwareSync": "queued",
+            "gatewayQueuedFor": sorted(queued),
+            "gatewayFaceQueuedFor": [
+                str(d) for d in response.get("faceQueuedFor", [])
+            ] if isinstance(response.get("faceQueuedFor"), list) else [],
+        }
+    # Some gateway versions return a plain acknowledgment: not verified.
+    return {"hardwareSync": "gateway_accepted", "gatewayQueuedFor": [], "gatewayFaceQueuedFor": []}
 
 
 @api_router.get("/access-levels")
@@ -1647,18 +1667,24 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     doc["_id"] = r.inserted_id
 
     try:
-        await sync_employee_to_gateway(doc)
-    except Exception:
-        await db.employees.delete_one({"_id": r.inserted_id})
-        raise
+        receipt = await sync_employee_to_gateway(doc)
+    except Exception as e:
+        # A gateway may have enqueued some device jobs before rejecting the
+        # command. Retain the registry record so operators can reconcile it;
+        # deleting here could orphan a valid card on an access controller.
+        await db.employees.update_one(
+            {"_id": r.inserted_id},
+            {"$set": {"hardwareSync": "error", "hardwareSyncError": str(e)}},
+        )
+        raise HTTPException(status_code=502, detail="Employee saved, but gateway enrollment failed. Check sync queue.")
 
-    synced_at = datetime.now(timezone.utc)
+    queued_at = datetime.now(timezone.utc)
+    status = {**receipt, "gatewayQueuedAt": queued_at}
     await db.employees.update_one(
         {"_id": r.inserted_id},
-        {"$set": {"hardwareSync": "gateway_accepted", "gatewayAcceptedAt": synced_at}},
+        {"$set": status, "$unset": {"hardwareSyncError": "", "hardwareSyncedAt": ""}},
     )
-    doc["hardwareSync"] = "gateway_accepted"
-    doc["gatewayAcceptedAt"] = synced_at
+    doc.update(status)
     return doc_id(doc)
 
 
@@ -1719,21 +1745,21 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
     doc = await db.employees.find_one({"_id": oid})
 
     try:
-        await sync_employee_to_gateway(doc)
+        receipt = await sync_employee_to_gateway(doc)
     except Exception as e:
         await db.employees.update_one(
             {"_id": oid},
             {"$set": {"hardwareSync": "error", "hardwareSyncError": str(e)}},
         )
-        raise HTTPException(status_code=502, detail=f"Employee saved, but hardware sync failed: {e}")
+        raise HTTPException(status_code=502, detail="Employee saved, but gateway enrollment failed. Check sync queue.")
 
-    synced_at = datetime.now(timezone.utc)
+    queued_at = datetime.now(timezone.utc)
+    status = {**receipt, "gatewayQueuedAt": queued_at}
     await db.employees.update_one(
         {"_id": oid},
-        {"$set": {"hardwareSync": "gateway_accepted", "gatewayAcceptedAt": synced_at}, "$unset": {"hardwareSyncError": "", "hardwareSyncedAt": ""}},
+        {"$set": status, "$unset": {"hardwareSyncError": "", "hardwareSyncedAt": ""}},
     )
-    doc["hardwareSync"] = "gateway_accepted"
-    doc["gatewayAcceptedAt"] = synced_at
+    doc.update(status)
     return doc_id(doc)
 
 
