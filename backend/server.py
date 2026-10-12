@@ -1499,7 +1499,7 @@ async def sync_employee_to_gateway(employee: dict):
     if not isinstance(cards, list):
         cards = [employee.get("cardNo")] if employee.get("cardNo") else []
     cards = [str(c).strip() for c in cards if str(c or "").strip()]
-    credentials = [{"type": "card", "value": c, "cardType": "normal"} for c in cards]
+    credentials = [{"type": "card", "value": c, "cardType": "normalCard"} for c in cards]
     if employee.get("photoPath"):
         try:
             photo_bytes, _ = await get_object(employee["photoPath"])
