@@ -1650,10 +1650,10 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     synced_at = datetime.now(timezone.utc)
     await db.employees.update_one(
         {"_id": r.inserted_id},
-        {"$set": {"hardwareSync": "gateway_accepted", "hardwareSyncedAt": synced_at}},
+        {"$set": {"hardwareSync": "gateway_accepted", "gatewayAcceptedAt": synced_at}},
     )
     doc["hardwareSync"] = "gateway_accepted"
-    doc["hardwareSyncedAt"] = synced_at
+    doc["gatewayAcceptedAt"] = synced_at
     return doc_id(doc)
 
 
@@ -1725,10 +1725,10 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
     synced_at = datetime.now(timezone.utc)
     await db.employees.update_one(
         {"_id": oid},
-        {"$set": {"hardwareSync": "gateway_accepted", "hardwareSyncedAt": synced_at}, "$unset": {"hardwareSyncError": ""}},
+        {"$set": {"hardwareSync": "gateway_accepted", "gatewayAcceptedAt": synced_at}, "$unset": {"hardwareSyncError": "", "hardwareSyncedAt": ""}},
     )
     doc["hardwareSync"] = "gateway_accepted"
-    doc["hardwareSyncedAt"] = synced_at
+    doc["gatewayAcceptedAt"] = synced_at
     return doc_id(doc)
 
 
