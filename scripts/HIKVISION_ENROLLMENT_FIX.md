@@ -3,7 +3,7 @@
 ## Findings
 
 The cloud server sends `person.upsert` to an authenticated studio gateway over WebSocket.
-The repository's `scripts/hikvision_gateway.py` is an older event-only ingest agent and
+Historical Windows gateway code recovered from earlier Kerma troubleshooting notes reads `person.validFrom` and `person.validTo` when creating `UserInfo.Valid`; the cloud now sends those alongside `Valid` for compatibility.\n\nThe repository's `scripts/hikvision_gateway.py` is an older event-only ingest agent and
 **does not implement** WebSocket `person.upsert`. The active studio gateway's implementation
 and controller mappings must be inspected on-site before this change can be called a hardware fix.
 
@@ -20,6 +20,8 @@ also was not read back after the gateway acknowledged a command.
     "id": "employee-id",
     "name": "Employee Name",
     "userType": "normal",
+    "validFrom": "2026-10-12T00:00:00",
+    "validTo": "2029-10-12T23:59:59",
     "Valid": {
       "enable": true,
       "beginTime": "2026-10-12T00:00:00",
@@ -40,8 +42,7 @@ level; **do not** copy this example's door permissions to other employees.
 ## Required behavior in the installed local gateway
 
 1. Confirm gateway version, device mapping, reachability and device clock/zone.
-2. For each authorized device, translate `person.Valid` to
-   `UserInfo.Valid` and use `userType: normal`.
+2. For each authorized device, translate `person.validFrom` / `person.validTo` (or `person.Valid` on newer adapters) to `UserInfo.Valid` and use `userType: normal`.
 3. Keep the existing access-level door selection. Provision the corresponding
    approved `doorRight` and `RightPlan` on the device without granting rights
    to other doors or silently substituting a global 24/7 plan.
