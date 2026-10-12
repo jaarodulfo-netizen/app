@@ -71,7 +71,7 @@ def load_gateway_sync_function():
     fn = next(node for node in tree.body if isinstance(node, ast.AsyncFunctionDef) and node.name == "sync_employee_to_gateway")
     norm = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "normalize_door_rights")
     validity = load_validity_function()
-    scope = {"resolve_credential_validity": validity, "HTTPException": HTTPException}
+    scope = {"resolve_credential_validity": validity, "HTTPException": HTTPException, "Optional": Optional}
     exec(compile(ast.Module(body=[norm, fn], type_ignores=[]), str(source), "exec"), scope)
     return scope
 
