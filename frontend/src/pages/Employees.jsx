@@ -372,7 +372,7 @@ function EnrollModal({ open, onClose }) {
                 photoPath = data.path;
             }
             const selectedLevel = accessLevels.find((item) => item.id === accessLevelId);
-            await addEmployee({
+            const enrolled = await addEmployee({
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 cardNo,
@@ -383,7 +383,9 @@ function EnrollModal({ open, onClose }) {
                 accessLevelId,
                 photoPath,
             });
-            toast.success('GATEWAY REQUEST ACCEPTED', { description: `${name} saved. Verify card, face and access on physical devices.` });
+            toast.success(enrolled.hardwareSync === 'queued' ? 'ENROLLMENT QUEUED' : 'GATEWAY ACCEPTED', {
+                description: `${name} saved. Hardware card and face enrollment remain unverified.`,
+            });
             reset();
             onClose();
         } catch (e) {
@@ -593,7 +595,7 @@ function EditEmployeeModal({ employee, onClose }) {
                 const { data } = await api.post('/upload/photo', fd);
                 photoPath = data.path;
             }
-            await updateEmployee(employee.id, {
+            const updated = await updateEmployee(employee.id, {
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 level: accessLevels.find((item) => item.id === accessLevelId)?.name || employee?.level || 'CUSTOM',
@@ -605,7 +607,9 @@ function EditEmployeeModal({ employee, onClose }) {
                 faceSync: false,
                 photoPath,
             });
-            toast.success('GATEWAY REQUEST ACCEPTED', { description: `${name} updated. Verify normal-card access on hardware.` });
+            toast.success(updated.hardwareSync === 'queued' ? 'UPDATE QUEUED' : 'GATEWAY ACCEPTED', {
+                description: `${name} updated. Device enrollment remains unverified.`,
+            });
             onClose();
         } catch (e) {
             toast.error('UPDATE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
@@ -826,7 +830,8 @@ export default function Employees() {
                                     <th className="px-4 py-3 font-medium">CARD NO.</th>
                                     <th className="px-4 py-3 font-medium">ROLE</th>
                                     <th className="px-4 py-3 font-medium">LEVEL</th>
-                                    <th className="px-4 py-3 font-medium">FACE</th>
+                                    <th className="px-4 py-3 font-medium">FACE PHOTO</th>
+                                    <th className="px-4 py-3 font-medium">HARDWARE</th>
                                     <th className="px-4 py-3 font-medium text-right">ACTIONS</th>
                                 </tr>
                             </thead>
@@ -847,7 +852,7 @@ export default function Employees() {
                                                     <div className="min-w-0">
                                                         <p className="truncate text-sm font-semibold text-slate-200">{emp.name}</p>
                                                         <p className="mono mt-0.5 text-[9px] tracking-wider text-slate-600">
-                                                            {emp.hardwareSync === 'error' ? 'GATEWAY ERROR' : emp.hardwareSync === 'pending' ? 'SYNC PENDING' : 'NOT DEVICE VERIFIED'}
+                                                            {emp.hardwareSync === 'error' ? 'GATEWAY ERROR' : emp.hardwareSync === 'pending' || emp.hardwareSync === 'queued' ? 'SYNC QUEUED' : 'NOT DEVICE VERIFIED'}
                                                         </p>
                                                     </div>
                                                 </div>
@@ -871,6 +876,22 @@ export default function Employees() {
                                                 }`}>
                                                     {emp.photoPath ? 'PHOTO ON FILE' : 'NO PHOTO'}
                                                 </span>
+                                            </td>
+                                            <td className="px-4 py-3.5">
+                                                <span className={`mono rounded border px-2 py-1 text-[9px] tracking-wider ${
+                                                    emp.hardwareSync === 'error'
+                                                        ? 'border-red-400/30 bg-red-400/10 text-red-300'
+                                                        : emp.hardwareSync === 'queued'
+                                                            ? 'border-amber-400/30 bg-amber-400/10 text-amber-300'
+                                                            : 'border-slate-500/30 bg-slate-500/10 text-slate-400'
+                                                }`}>
+                                                    {emp.hardwareSync === 'error' ? 'SYNC ERROR' : emp.hardwareSync === 'queued' ? 'QUEUED' : 'NOT VERIFIED'}
+                                                </span>
+                                                {Array.isArray(emp.gatewayQueuedFor) && emp.gatewayQueuedFor.length > 0 && (
+                                                    <p className="mt-1 text-[9px] text-slate-500" title={emp.gatewayQueuedFor.join(', ')}>
+                                                        {emp.gatewayQueuedFor.length} DEVICE(S) QUEUED
+                                                    </p>
+                                                )}
                                             </td>
                                             <td className="px-4 py-3.5">
                                                 <div className="flex justify-end gap-2">
@@ -902,7 +923,7 @@ export default function Employees() {
                                 })}
                                 {filteredEmployees.length === 0 && (
                                     <tr>
-                                        <td colSpan="7" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
+                                        <td colSpan="8" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
                                             NO ENROLLMENTS MATCH THE CURRENT FILTERS
                                         </td>
                                     </tr>
