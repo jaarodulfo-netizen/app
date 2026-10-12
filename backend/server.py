@@ -1515,6 +1515,11 @@ async def sync_employee_to_gateway(employee: dict):
             "id": person_id,
             "name": str(employee.get("name") or "").strip(),
             "userType": "normal",
+            # Support the installed Windows gateway: its ISAPI client reads
+            # person.validFrom / person.validTo, not person.Valid.
+            "validFrom": validity["beginTime"],
+            "validTo": validity["endTime"],
+            # Newer gateway adapters may consume the normalized ISAPI block.
             "Valid": validity,
             "doorRights": normalize_door_rights(employee.get("doorRights")),
         },
