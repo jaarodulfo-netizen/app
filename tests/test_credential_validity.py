@@ -58,5 +58,5 @@ def test_gateway_contract_explicitly_uses_normal_and_validity():
     compiled = ast.unparse(fn)
     assert "'userType': 'normal'" in compiled
     assert "'Valid': validity" in compiled
-    assert "'cardType': 'normal'" in compiled
+    assert "'cardType': 'normalCard'" in compiled
     assert 'doorRights' in compiled
