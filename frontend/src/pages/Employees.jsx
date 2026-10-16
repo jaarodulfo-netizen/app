@@ -327,9 +327,6 @@ function EnrollModal({ open, onClose }) {
     const [cardNo, setCardNo] = useState('');
     const [photo, setPhoto] = useState(null);
     const [photoPreview, setPhotoPreview] = useState(null);
-    const [faceState, setFaceState] = useState('idle');
-    const [progress, setProgress] = useState(0);
-    const [match, setMatch] = useState(null);
     const [saving, setSaving] = useState(false);
     const fileRef = useRef(null);
 
@@ -340,33 +337,21 @@ function EnrollModal({ open, onClose }) {
             .catch(() => setAccessLevels([]));
     }, [open]);
 
-    useEffect(() => {
-        if (faceState !== 'scanning') return;
-        const t = setInterval(() => {
-            setProgress((p) => {
-                if (p >= 100) {
-                    clearInterval(t);
-                    setFaceState('done');
-                    setMatch((97 + Math.random() * 2.8).toFixed(1));
-                    return 100;
-                }
-                return p + 4;
-            });
-        }, 110);
-        return () => clearInterval(t);
-    }, [faceState]);
-
     const reset = () => {
         setName(''); setRole(''); setAccessLevelId(''); setCardNo('');
         setPhoto(null);
         if (photoPreview) URL.revokeObjectURL(photoPreview);
         setPhotoPreview(null);
-        setFaceState('idle'); setProgress(0); setMatch(null);
     };
 
     const pickPhoto = (e) => {
         const f = e.target.files?.[0];
         if (!f) return;
+        if (!['image/jpeg', 'image/png'].includes(f.type) || f.size > 5 * 1024 * 1024 || f.size === 0) {
+            toast.error('INVALID FACE PHOTO', { description: 'Use a JPG or PNG image under 5 MB.' });
+            e.target.value = '';
+            return;
+        }
         if (photoPreview) URL.revokeObjectURL(photoPreview);
         setPhoto(f);
         setPhotoPreview(URL.createObjectURL(f));
@@ -387,13 +372,13 @@ function EnrollModal({ open, onClose }) {
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 cardNo,
-                faceSync: true,
-                faceMatch: match,
+                faceSync: false, // Photo upload is not proof of hardware enrollment.
+                faceMatch: null,
                 level: selectedLevel?.name || 'CUSTOM',
                 accessLevelId,
                 photoPath,
             });
-            toast.success('PROFILE SYNCHRONIZED', { description: `${name} saved to registry · ready to push to scanners` });
+            toast.info('ENROLLMENT QUEUED', { description: `${name} saved. Check registration on every authorized device.` });
             reset();
             onClose();
         } catch (e) {
@@ -403,7 +388,7 @@ function EnrollModal({ open, onClose }) {
         }
     };
 
-    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) && faceState === 'done' && !!accessLevelId;
+    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) && !!accessLevelId;
 
     return (
         <AnimatePresence>
@@ -449,7 +434,7 @@ function EnrollModal({ open, onClose }) {
                                     </button>
                                     <div>
                                         <p className="mono text-[10px] tracking-widest text-slate-500">ID PHOTO · OPTIONAL</p>
-                                        <p className="text-xs text-slate-500 mt-1">JPG/PNG up to 5MB. If provided, the gateway will also push the face to the assigned terminals.</p>
+                                        <p className="text-xs text-slate-500 mt-1">JPG/PNG up to 5 MB. Use a clear, front-facing photo. Physical face enrollment must be verified.</p>
                                     </div>
                                     <input ref={fileRef} data-testid="enroll-photo-input" type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
                                 </div>
@@ -506,61 +491,24 @@ function EnrollModal({ open, onClose }) {
                             </div>
 
                             <div className="relative flex flex-col items-center justify-center rounded-xl border border-sky-500/20 bg-black/50 bg-grid p-5 min-h-[300px] overflow-hidden">
-                                <span className="absolute left-3 top-3 h-4 w-4 border-t-2 border-l-2 border-sky-400/60" />
-                                <span className="absolute right-3 top-3 h-4 w-4 border-t-2 border-r-2 border-sky-400/60" />
-                                <span className="absolute left-3 bottom-3 h-4 w-4 border-b-2 border-l-2 border-sky-400/60" />
-                                <span className="absolute right-3 bottom-3 h-4 w-4 border-b-2 border-r-2 border-sky-400/60" />
-
-                                {faceState === 'idle' && (
-                                    <>
-                                        {photoPreview ? (
-                                            <img src={photoPreview} alt="Face source" className="h-24 w-24 rounded-full object-cover ring-2 ring-sky-400/50" />
-                                        ) : (
-                                            <ScanFace size={52} className="text-sky-500/70" />
-                                        )}
-                                        <p className="mono text-[10px] tracking-[0.3em] text-slate-500 mt-4 text-center">BIOMETRIC CAPTURE READY</p>
-                                        <button
-                                            data-testid="face-capture-btn"
-                                            onClick={() => { setFaceState('scanning'); setProgress(0); }}
-                                            className="mt-5 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-xs text-[#04121f] transition-colors duration-200 hover:bg-cyan-400"
-                                        >
-                                            START FACE CAPTURE
-                                        </button>
-                                    </>
+                                {photoPreview ? (
+                                    <img src={photoPreview} alt="Face enrollment photo preview" className="h-32 w-32 rounded-full object-cover ring-2 ring-sky-400/50" />
+                                ) : (
+                                    <ScanFace size={52} className="text-sky-500/70" />
                                 )}
-                                {faceState === 'scanning' && (
-                                    <>
-                                        {photoPreview ? (
-                                            <img src={photoPreview} alt="Scanning" className="h-24 w-24 rounded-full object-cover ring-2 ring-cyan-400/70" />
-                                        ) : (
-                                            <ScanFace size={52} className="text-cyan-300" />
-                                        )}
-                                        <div className="absolute inset-x-6 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent scan-line shadow-[0_0_16px_rgba(34,211,238,0.8)]" />
-                                        <p className="mono text-xs tracking-[0.3em] text-cyan-300 mt-5 tabular-nums">SCANNING · {progress}%</p>
-                                        <p className="mono text-[9px] tracking-widest text-slate-600 mt-2">EXTRACTING 512-DIM EMBEDDING</p>
-                                    </>
-                                )}
-                                {faceState === 'done' && (
-                                    <>
-                                        <div className="flex h-16 w-16 items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-400/10">
-                                            <Check size={28} className="text-emerald-300" />
-                                        </div>
-                                        <p className="mono text-[10px] tracking-[0.3em] text-emerald-300 mt-4">EMBEDDING EXTRACTED</p>
-                                        <p className="mono text-xs tracking-widest text-slate-400 mt-2">REFERENCE MATCH · {match}%</p>
-                                        <button
-                                            data-testid="face-recapture-btn"
-                                            onClick={() => { setFaceState('scanning'); setProgress(0); }}
-                                            className="mt-4 mono text-[10px] tracking-widest text-sky-400 hover:text-cyan-300 transition-colors duration-200"
-                                        >
-                                            RECAPTURE
-                                        </button>
-                                    </>
-                                )}
+                                <p className="mono text-[10px] tracking-[0.2em] text-sky-300 mt-5 text-center">
+                                    {photoPreview ? 'FACE PHOTO READY' : 'FACE PHOTO NOT PROVIDED'}
+                                </p>
+                                <p className="text-xs text-slate-400 mt-3 text-center max-w-[250px]">
+                                    {photoPreview
+                                        ? 'The photo is included in the enrollment request. Facial access stays unverified until the Hikvision terminals confirm it.'
+                                        : 'Card-only enrollment is possible. Add a clear photo to request facial access on the authorized Hikvision terminals.'}
+                                </p>
                             </div>
                         </div>
 
                         <div className="mt-7 flex items-center justify-between gap-3 border-t border-white/5 pt-5">
-                            <p className="mono text-[9px] tracking-widest text-slate-600 hidden sm:block">STORED IN REGISTRY · PUSH TO SCANNERS FROM THE CARD</p>
+                            <p className="mono text-[9px] tracking-widest text-slate-600 hidden sm:block">FACE ENROLLMENT MUST BE VERIFIED ON EACH TERMINAL</p>
                             <button
                                 data-testid="enroll-submit-btn"
                                 onClick={submit}
@@ -570,7 +518,7 @@ function EnrollModal({ open, onClose }) {
                                 }`}
                             >
                                 {saving ? <Loader2 size={15} className="animate-spin" /> : <UserPlus size={15} />}
-                                {saving ? 'SAVING…' : 'ENROLL & SYNC'}
+                                {saving ? 'SAVING…' : 'ENROLL & REQUEST SYNC'}
                             </button>
                         </div>
                     </motion.div>
@@ -899,11 +847,9 @@ export default function Employees() {
                                             </td>
                                             <td className="px-4 py-3.5">
                                                 <span className={`mono rounded border px-2 py-1 text-[9px] tracking-wider ${
-                                                    emp.faceSync
-                                                        ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
-                                                        : 'border-orange-400/30 bg-orange-400/10 text-orange-300'
+                                                    'border-orange-400/30 bg-orange-400/10 text-orange-300'
                                                 }`}>
-                                                    {emp.faceSync ? 'SYNCED' : 'PENDING'}
+                                                    {emp.photoPath ? 'FACE NOT VERIFIED' : 'NO PHOTO IN V2'}
                                                 </span>
                                             </td>
                                             <td className="px-4 py-3.5">
