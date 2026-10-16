@@ -748,11 +748,12 @@ function EditEmployeeModal({ employee, onClose }) {
 }
 
 export default function Employees() {
-    const { employees, deleteEmployee } = useSecurity();
+    const { employees, devices, deleteEmployee, refreshEmployees } = useSecurity();
     const [open, setOpen] = useState(false);
     const [accessLevelsOpen, setAccessLevelsOpen] = useState(false);
     const [editing, setEditing] = useState(null);
     const [retryingId, setRetryingId] = useState(null);
+    const [syncViewId, setSyncViewId] = useState(null);
     const [query, setQuery] = useState('');
     const [faceFilter, setFaceFilter] = useState('all');
     const [levelFilter, setLevelFilter] = useState('all');
@@ -786,14 +787,18 @@ export default function Employees() {
         try {
             const { data } = await api.post(`/employees/${emp.id}/retry-sync`);
             toast.info('HARDWARE SYNC QUEUED', {
-                description: `${emp.name}: ${Object.keys(data.doorRights || {}).length} device(s) requested; not verified yet. Refresh to see assigned Person ID.`,
+                description: `${emp.name}: request queued for the selected doors. Physical confirmation appears below each card after the Gateway reports it.`,
             });
+            await refreshEmployees();
         } catch (e) {
             toast.error('RETRY FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
         } finally {
             setRetryingId(null);
         }
     };
+
+    const deviceMap = Object.fromEntries((devices || []).filter(d => d.gatewayDeviceId).map(d => [d.gatewayDeviceId, d]));
+    const cardDeviceIds = (emp) => Object.keys(emp.doorRights || {}).filter(id => deviceMap[id]?.type === 'card');
 
     const remove = async (emp) => {
         try {
@@ -888,6 +893,7 @@ export default function Employees() {
                                     <th className="px-4 py-3 font-medium">PERSON ID</th>
                                     <th className="px-4 py-3 font-medium">CARD NO.</th>
                                     <th className="px-4 py-3 font-medium">ROLE</th>
+                                    <th className="px-4 py-3 font-medium">CARD SYNC</th>
                                     <th className="px-4 py-3 font-medium">LEVEL</th>
                                     <th className="px-4 py-3 font-medium">FACE</th>
                                     <th className="px-4 py-3 font-medium text-right">ACTIONS</th>
@@ -896,6 +902,8 @@ export default function Employees() {
                             <tbody>
                                 {filteredEmployees.map((emp, i) => {
                                     const cards = emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : []);
+                                    const targets = cardDeviceIds(emp);
+                                    const synced = targets.filter(id => emp.hardwareDeviceStatus?.[id]?.status === 'verified');
                                     return (
                                         <motion.tr
                                             key={emp.id}
@@ -924,6 +932,27 @@ export default function Employees() {
                                                 </div>
                                             </td>
                                             <td className="px-4 py-3.5 text-xs text-slate-400">{emp.role || '—'}</td>
+                                            <td className="px-4 py-3.5">
+                                                <button type="button" onClick={() => setSyncViewId(syncViewId === emp.id ? null : emp.id)}
+                                                    title="Show physical card verification by controller" className="text-left">
+                                                    <span className={`mono text-[10px] tracking-wider ${targets.length > 0 && synced.length === targets.length ? 'text-emerald-300' : 'text-orange-300'}`}>
+                                                        {targets.length ? `${synced.length}/${targets.length} VERIFIED` : 'NO CARD DEVICE'}
+                                                    </span>
+                                                    <p className="text-[9px] text-slate-500">SHOW DEVICES</p>
+                                                </button>
+                                                {syncViewId === emp.id && (
+                                                    <div className="mt-2 min-w-[150px] space-y-1">
+                                                        {targets.map(id => (
+                                                            <p key={id} className="text-[10px] text-slate-300">
+                                                                {deviceMap[id]?.name || id}: {emp.hardwareDeviceStatus?.[id]?.status || 'pending'}
+                                                                {emp.hardwareDeviceStatus?.[id]?.error && <span className="block text-orange-400">{emp.hardwareDeviceStatus[id].error}</span>}
+                                                            </p>
+                                                        ))}
+                                                        <button onClick={() => refreshEmployees().catch(() => toast.error('STATUS REFRESH FAILED'))}
+                                                            className="text-[10px] text-sky-300 underline">REFRESH STATUS</button>
+                                                    </div>
+                                                )}
+                                            </td>
                                             <td className="px-4 py-3.5">
                                                 <span className="mono rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1 text-[9px] tracking-wider text-sky-300">{emp.level || '—'}</span>
                                             </td>
@@ -976,7 +1005,7 @@ export default function Employees() {
                                 })}
                                 {filteredEmployees.length === 0 && (
                                     <tr>
-                                        <td colSpan="7" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
+                                        <td colSpan="8" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
                                             NO ENROLLMENTS MATCH THE CURRENT FILTERS
                                         </td>
                                     </tr>
