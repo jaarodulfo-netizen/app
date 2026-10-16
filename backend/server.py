@@ -134,6 +134,8 @@ class EmployeeIn(BaseModel):
     cardNo: str = ""
     cardNos: Optional[List[str]] = None
     personId: Optional[str] = None
+    validFrom: Optional[str] = None
+    validTo: Optional[str] = None
     faceSync: bool = False
     faceMatch: Optional[str] = None
     level: str = "L1 · GENERAL"
@@ -148,6 +150,8 @@ class EmployeeUpdate(BaseModel):
     cardNo: Optional[str] = None
     cardNos: Optional[List[str]] = None
     personId: Optional[str] = None
+    validFrom: Optional[str] = None
+    validTo: Optional[str] = None
     faceSync: Optional[bool] = None
     faceMatch: Optional[str] = None
     level: Optional[str] = None
@@ -1451,7 +1455,87 @@ async def resolve_employee_door_rights(access_level_id: Optional[str], explicit:
     return normalize_door_rights(explicit), None
 
 
+# KERMA_NATIVE_CARD_AUTOSYNC_V4
+# Allocate stable eight-digit Hikvision identifiers for NEW enrollments only.
+# Never reuse a historical iVMS ID or infer one from a Mongo ObjectId.
+async def ensure_hikvision_employee_identity(employee: dict) -> dict:
+    from datetime import timedelta
+    from pymongo import ReturnDocument
+
+    current_id = str(employee.get("personId") or "").strip()
+    if not current_id:
+        # Counter operations are atomic in MongoDB; this range stays separate
+        # from the historic imported eight-digit iVMS identifiers.
+        await db.hikvision_sequences.update_one(
+            {"_id": "native_employee_number"},
+            {"$setOnInsert": {"value": 10000000}},
+            upsert=True,
+        )
+        for _ in range(20):
+            entry = await db.hikvision_sequences.find_one_and_update(
+                {"_id": "native_employee_number"},
+                {"$inc": {"value": 1}},
+                return_document=ReturnDocument.AFTER,
+            )
+            candidate = str(entry["value"]).zfill(8)
+            if int(candidate) > 4294967295:
+                raise HTTPException(status_code=409, detail="Hikvision numeric ID range exhausted")
+            if await db.employees.find_one({"personId": candidate}):
+                continue
+            await db.employees.update_one(
+                {"_id": employee["_id"], "$or": [
+                    {"personId": {"$exists": False}},
+                    {"personId": None},
+                    {"personId": ""},
+                ]},
+                {"$set": {"personId": candidate}},
+            )
+            current = await db.employees.find_one({"_id": employee["_id"]})
+            current_id = str((current or {}).get("personId") or "").strip()
+            if current_id:
+                break
+        if not current_id:
+            raise HTTPException(status_code=409, detail="Could not allocate Hikvision Person ID")
+
+    if not current_id.isascii() or not current_id.isdigit() or not 1 <= int(current_id) <= 4294967295:
+        raise HTTPException(status_code=409, detail="Employee Person ID must be numeric for Hikvision SDK")
+    if await db.employees.find_one({"personId": current_id, "_id": {"$ne": employee["_id"]}}):
+        raise HTTPException(status_code=409, detail="Hikvision Person ID already assigned to another employee")
+
+    begin = employee.get("validFrom")
+    finish = employee.get("validTo")
+    if bool(begin) != bool(finish):
+        raise HTTPException(status_code=400, detail="Both card validity dates are required")
+    if not begin:
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo("America/Monterrey")
+        created = employee.get("created_at")
+        if isinstance(created, datetime) and created.tzinfo:
+            started_day = created.astimezone(zone).date()
+        else:
+            started_day = datetime.now(zone).date()
+        try:
+            end_day = started_day.replace(year=started_day.year + 3) - timedelta(days=1)
+        except ValueError:  # Leap day
+            end_day = started_day.replace(year=started_day.year + 3, day=28) - timedelta(days=1)
+        begin = f"{started_day.isoformat()}T00:00:00"
+        finish = f"{end_day.isoformat()}T23:59:59"
+        await db.employees.update_one(
+            {"_id": employee["_id"]},
+            {"$set": {"validFrom": begin, "validTo": finish}},
+        )
+
+    try:
+        a, b = datetime.fromisoformat(str(begin)), datetime.fromisoformat(str(finish))
+        if a.tzinfo or b.tzinfo or a >= b or not 1970 <= a.year <= 2037 or b.year > 2037:
+            raise ValueError("out of range")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid local card validity dates") from exc
+    return {**employee, "personId": current_id, "validFrom": str(begin), "validTo": str(finish)}
+
+
 async def sync_employee_to_gateway(employee: dict):
+    employee = await ensure_hikvision_employee_identity(employee)
     cards = employee.get("cardNos")
     if not isinstance(cards, list):
         cards = [employee.get("cardNo")] if employee.get("cardNo") else []
@@ -1465,13 +1549,15 @@ async def sync_employee_to_gateway(employee: dict):
             logger.exception("Face photo could not be loaded for enrollment")
             raise HTTPException(status_code=502, detail="Face photo could not be loaded for device enrollment") from e
 
-    person_id = str(employee.get("personId") or employee.get("_id"))
+    person_id = str(employee["personId"])
     return await send_gateway_command({
         "kind": "person.upsert",
         "person": {
             "id": person_id,
             "name": str(employee.get("name") or "").strip(),
             "userType": "normal",
+            "validFrom": str(employee["validFrom"]),
+            "validTo": str(employee["validTo"]),
             "doorRights": normalize_door_rights(employee.get("doorRights")),
         },
         "credentials": credentials,
@@ -1599,6 +1685,7 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
 
     try:
         await sync_employee_to_gateway(doc)
+        doc = await db.employees.find_one({"_id": doc["_id"]}) or doc
     except Exception:
         await db.employees.delete_one({"_id": r.inserted_id})
         raise
@@ -1669,6 +1756,7 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
 
     try:
         await sync_employee_to_gateway(doc)
+        doc = await db.employees.find_one({"_id": doc["_id"]}) or doc
     except Exception as e:
         await db.employees.update_one(
             {"_id": oid},
@@ -1684,6 +1772,50 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
     doc["hardwareSync"] = "queued"
     doc["hardwareQueuedAt"] = synced_at
     return doc_id(doc)
+
+
+@api_router.post("/employees/{item_id}/retry-sync")
+async def retry_employee_sync(item_id: str, user=Depends(get_current_user)):
+    # A retry uses the EXISTING employee/card/explicit doorRights.
+    # No second employee is created and no device permission is inferred.
+    if user.get("role") != "commander":
+        raise HTTPException(status_code=403, detail="Only the commander can retry hardware enrollment")
+    try:
+        oid = ObjectId(item_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid employee ID") from exc
+    employee = await db.employees.find_one({"_id": oid})
+    if not employee:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if not normalize_door_rights(employee.get("doorRights")):
+        raise HTTPException(status_code=400, detail="Employee has no explicit authorized doors")
+    await db.employees.update_one(
+        {"_id": oid},
+        {"$set": {"hardwareSync": "pending"}, "$unset": {"hardwareSyncError": ""}},
+    )
+    try:
+        result = await sync_employee_to_gateway(employee)
+    except Exception as exc:
+        await db.employees.update_one(
+            {"_id": oid}, {"$set": {"hardwareSync": "error", "hardwareSyncError": str(exc)}}
+        )
+        raise HTTPException(status_code=502, detail=f"Gateway queue failed: {exc}") from exc
+
+    at = datetime.now(timezone.utc)
+    await db.employees.update_one(
+        {"_id": oid}, {"$set": {"hardwareSync": "queued", "hardwareQueuedAt": at}},
+    )
+    fresh = await db.employees.find_one({"_id": oid})
+    return {
+        "ok": True,
+        "queued": True,
+        "hardwareVerified": False,
+        "personId": fresh.get("personId"),
+        "validFrom": fresh.get("validFrom"),
+        "validTo": fresh.get("validTo"),
+        "doorRights": normalize_door_rights(fresh.get("doorRights")),
+        "gateway": result,
+    }
 
 
 @api_router.delete("/employees/{item_id}")
