@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save, Search, Filter, ShieldCheck, Plus } from 'lucide-react';
+import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save, Search, Filter, ShieldCheck, Plus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -690,6 +690,7 @@ export default function Employees() {
     const [open, setOpen] = useState(false);
     const [accessLevelsOpen, setAccessLevelsOpen] = useState(false);
     const [editing, setEditing] = useState(null);
+    const [retryingId, setRetryingId] = useState(null);
     const [query, setQuery] = useState('');
     const [faceFilter, setFaceFilter] = useState('all');
     const [levelFilter, setLevelFilter] = useState('all');
@@ -713,10 +714,29 @@ export default function Employees() {
         return matchesQuery && matchesFace && matchesLevel;
     });
 
+    const retryHardwareSync = async (emp) => {
+        const cards = emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : []);
+        if (!cards.length) {
+            toast.error('MISSING CARD', { description: 'This employee has no assigned card.' });
+            return;
+        }
+        setRetryingId(emp.id);
+        try {
+            const { data } = await api.post(`/employees/${emp.id}/retry-sync`);
+            toast.info('HARDWARE SYNC QUEUED', {
+                description: `${emp.name}: ${Object.keys(data.doorRights || {}).length} device(s) requested; not verified yet. Refresh to see assigned Person ID.`,
+            });
+        } catch (e) {
+            toast.error('RETRY FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally {
+            setRetryingId(null);
+        }
+    };
+
     const remove = async (emp) => {
         try {
             await deleteEmployee(emp.id);
-            toast.success('CREDENTIAL REVOKED', { description: `${emp.name} removed from the registry` });
+            toast.info('RECORD REMOVED', { description: `${emp.name} removed from V2. Physical credential revocation is not confirmed.` });
         } catch (e) {
             toast.error('DELETE FAILED', { description: 'Could not remove employee — try again' });
         }
@@ -865,6 +885,18 @@ export default function Employees() {
                                                             title="Copy card number"
                                                         >
                                                             <Copy size={13} />
+                                                        </button>
+                                                    )}
+                                                    {cards.length > 0 && emp.source !== 'iVMS-4200' && (
+                                                        <button
+                                                            data-testid={`retry-sync-${emp.id}`}
+                                                            onClick={() => retryHardwareSync(emp)}
+                                                            disabled={retryingId === emp.id}
+                                                            title="Re-queue this employee on assigned devices (does not prove physical access)"
+                                                            className="flex items-center gap-1.5 rounded-md border border-orange-400/25 px-3 py-2 mono text-[9px] tracking-widest text-orange-300 hover:bg-orange-400/10 disabled:opacity-40"
+                                                        >
+                                                            <RefreshCw size={12} className={retryingId === emp.id ? 'animate-spin' : ''} />
+                                                            {retryingId === emp.id ? 'QUEUEING' : 'RETRY SYNC'}
                                                         </button>
                                                     )}
                                                     <button
