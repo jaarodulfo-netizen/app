@@ -530,7 +530,18 @@ function EnrollModal({ open, onClose }) {
 
 
 function EditEmployeeModal({ employee, onClose }) {
-    const { updateEmployee } = useSecurity();
+    const { updateEmployee, doors, devices } = useSecurity();
+    const [customRights, setCustomRights] = useState(!employee?.accessLevelId);
+    const [selectedDoors, setSelectedDoors] = useState(() => {
+        const rights = employee?.doorRights || {};
+        return Object.entries(rights).flatMap(([id, nums]) =>
+            (Array.isArray(nums) ? nums : []).map((n) => `${id}:${Number(n)}`));
+    });
+    const deviceNames = Object.fromEntries((devices || []).filter(d => d.gatewayDeviceId)
+        .map(d => [d.gatewayDeviceId, d.name]));
+    const availableDoors = (doors || []).filter(d => d.gatewayDeviceId && Number.isInteger(Number(d.doorNo)) && Number(d.doorNo) > 0 &&
+        (d.visible !== false || selectedDoors.includes(`${d.gatewayDeviceId}:${Number(d.doorNo)}`)));
+    const toggleDoor = (key) => setSelectedDoors(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
     const [name, setName] = useState(employee?.name || '');
     const [role, setRole] = useState(employee?.role || '');
     const [accessLevels, setAccessLevels] = useState([]);
@@ -584,11 +595,27 @@ function EditEmployeeModal({ employee, onClose }) {
                 const { data } = await api.post('/upload/photo', fd);
                 photoPath = data.path;
             }
+            if (customRights && !selectedDoors.length) {
+                toast.error('SELECT AT LEAST ONE DOOR');
+                return;
+            }
+            const doorRights = {};
+            if (customRights) {
+                for (const key of selectedDoors) {
+                    const split = key.lastIndexOf(':');
+                    const id = key.slice(0, split), number = Number(key.slice(split + 1));
+                    if (!id || !availableDoors.some(d => d.gatewayDeviceId === id && Number(d.doorNo) === number)) {
+                        throw new Error('Selected door is not available in the physical device inventory');
+                    }
+                    (doorRights[id] ||= []).push(number);
+                }
+            }
             await updateEmployee(employee.id, {
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 level: accessLevels.find((item) => item.id === accessLevelId)?.name || employee?.level || 'CUSTOM',
-                accessLevelId,
+                accessLevelId: customRights ? '' : accessLevelId,
+                ...(customRights ? { doorRights } : {}),
                 cardNos: parsedCards,
                 cardNo: parsedCards[0] || '',
                 photoPath,
@@ -611,7 +638,7 @@ function EditEmployeeModal({ employee, onClose }) {
                 initial={{ opacity: 0, y: 24, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 24 }}
-                className="relative w-full max-w-xl rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8"
+                className="relative w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8"
             >
                 <div className="flex items-start justify-between">
                     <div>
@@ -657,6 +684,41 @@ function EditEmployeeModal({ employee, onClose }) {
                         </select>
                     </div>
 
+                    <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.04] p-4">
+                        <label className="flex cursor-pointer items-center gap-3 text-xs text-sky-200">
+                            <input type="checkbox" checked={customRights} onChange={(e) => setCustomRights(e.target.checked)}
+                                className="accent-sky-500" data-testid="employee-custom-door-rights" />
+                            SELECT INDIVIDUAL PHYSICAL DOORS (override access level)
+                        </label>
+                        {customRights && (
+                            <div className="mt-3 max-h-56 space-y-2 overflow-y-auto">
+                                {availableDoors.length === 0
+                                    ? <p className="text-xs text-orange-300">No physical access doors are loaded; check Gateway inventory.</p>
+                                    : Object.entries(availableDoors.reduce((groups, door) => {
+                                        (groups[door.gatewayDeviceId] ||= []).push(door);
+                                        return groups;
+                                    }, {})).map(([deviceId, list]) => (
+                                        <div key={deviceId} className="rounded border border-white/5 p-2">
+                                            <p className="mono text-[10px] text-sky-200">{deviceNames[deviceId] || deviceId}</p>
+                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                {list.map((door) => {
+                                                    const key = `${deviceId}:${Number(door.doorNo)}`;
+                                                    return (
+                                                        <label key={key} className="flex items-center gap-2 rounded border border-white/10 px-2 py-1.5 text-xs text-slate-200">
+                                                            <input type="checkbox" checked={selectedDoors.includes(key)} onChange={() => toggleDoor(key)}
+                                                                className="accent-sky-500" />
+                                                            {door.name || `Door ${door.doorNo}`} (#{Number(door.doorNo)})
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                            </div>
+                        )}
+                        <p className="mt-2 text-[10px] text-slate-500">Only checked doors will be requested. Saving is not proof of physical programming.</p>
+                    </div>
+
                     <div>
                         <label className="mono text-[10px] tracking-widest text-slate-500">CARD NUMBERS · 10 DIGITS EACH</label>
                         <textarea
@@ -674,7 +736,7 @@ function EditEmployeeModal({ employee, onClose }) {
 
                 <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-5">
                     <button onClick={onClose} className="rounded-full border border-white/10 px-5 py-2.5 mono text-[10px] tracking-widest text-slate-400 hover:text-white">CANCEL</button>
-                    <button onClick={submit} disabled={saving || !cardsValid || !name.trim()}
+                    <button onClick={submit} disabled={saving || !cardsValid || !name.trim() || (customRights ? selectedDoors.length === 0 : !accessLevelId)}
                         className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
                         {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                         {saving ? 'SAVING…' : 'SAVE CHANGES'}
