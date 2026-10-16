@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save, Search, Filter, ShieldCheck, Plus } from 'lucide-react';
+import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save, Search, Filter, ShieldCheck, Plus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -530,7 +530,18 @@ function EnrollModal({ open, onClose }) {
 
 
 function EditEmployeeModal({ employee, onClose }) {
-    const { updateEmployee } = useSecurity();
+    const { updateEmployee, doors, devices } = useSecurity();
+    const [customRights, setCustomRights] = useState(!employee?.accessLevelId);
+    const [selectedDoors, setSelectedDoors] = useState(() => {
+        const rights = employee?.doorRights || {};
+        return Object.entries(rights).flatMap(([id, nums]) =>
+            (Array.isArray(nums) ? nums : []).map((n) => `${id}:${Number(n)}`));
+    });
+    const deviceNames = Object.fromEntries((devices || []).filter(d => d.gatewayDeviceId)
+        .map(d => [d.gatewayDeviceId, d.name]));
+    const availableDoors = (doors || []).filter(d => d.gatewayDeviceId && Number.isInteger(Number(d.doorNo)) && Number(d.doorNo) > 0 &&
+        (d.visible !== false || selectedDoors.includes(`${d.gatewayDeviceId}:${Number(d.doorNo)}`)));
+    const toggleDoor = (key) => setSelectedDoors(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
     const [name, setName] = useState(employee?.name || '');
     const [role, setRole] = useState(employee?.role || '');
     const [accessLevels, setAccessLevels] = useState([]);
@@ -584,11 +595,27 @@ function EditEmployeeModal({ employee, onClose }) {
                 const { data } = await api.post('/upload/photo', fd);
                 photoPath = data.path;
             }
+            if (customRights && !selectedDoors.length) {
+                toast.error('SELECT AT LEAST ONE DOOR');
+                return;
+            }
+            const doorRights = {};
+            if (customRights) {
+                for (const key of selectedDoors) {
+                    const split = key.lastIndexOf(':');
+                    const id = key.slice(0, split), number = Number(key.slice(split + 1));
+                    if (!id || !availableDoors.some(d => d.gatewayDeviceId === id && Number(d.doorNo) === number)) {
+                        throw new Error('Selected door is not available in the physical device inventory');
+                    }
+                    (doorRights[id] ||= []).push(number);
+                }
+            }
             await updateEmployee(employee.id, {
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 level: accessLevels.find((item) => item.id === accessLevelId)?.name || employee?.level || 'CUSTOM',
-                accessLevelId,
+                accessLevelId: customRights ? '' : accessLevelId,
+                ...(customRights ? { doorRights } : {}),
                 cardNos: parsedCards,
                 cardNo: parsedCards[0] || '',
                 photoPath,
@@ -611,7 +638,7 @@ function EditEmployeeModal({ employee, onClose }) {
                 initial={{ opacity: 0, y: 24, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 24 }}
-                className="relative w-full max-w-xl rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8"
+                className="relative w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8"
             >
                 <div className="flex items-start justify-between">
                     <div>
@@ -657,6 +684,41 @@ function EditEmployeeModal({ employee, onClose }) {
                         </select>
                     </div>
 
+                    <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.04] p-4">
+                        <label className="flex cursor-pointer items-center gap-3 text-xs text-sky-200">
+                            <input type="checkbox" checked={customRights} onChange={(e) => setCustomRights(e.target.checked)}
+                                className="accent-sky-500" data-testid="employee-custom-door-rights" />
+                            SELECT INDIVIDUAL PHYSICAL DOORS (override access level)
+                        </label>
+                        {customRights && (
+                            <div className="mt-3 max-h-56 space-y-2 overflow-y-auto">
+                                {availableDoors.length === 0
+                                    ? <p className="text-xs text-orange-300">No physical access doors are loaded; check Gateway inventory.</p>
+                                    : Object.entries(availableDoors.reduce((groups, door) => {
+                                        (groups[door.gatewayDeviceId] ||= []).push(door);
+                                        return groups;
+                                    }, {})).map(([deviceId, list]) => (
+                                        <div key={deviceId} className="rounded border border-white/5 p-2">
+                                            <p className="mono text-[10px] text-sky-200">{deviceNames[deviceId] || deviceId}</p>
+                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                {list.map((door) => {
+                                                    const key = `${deviceId}:${Number(door.doorNo)}`;
+                                                    return (
+                                                        <label key={key} className="flex items-center gap-2 rounded border border-white/10 px-2 py-1.5 text-xs text-slate-200">
+                                                            <input type="checkbox" checked={selectedDoors.includes(key)} onChange={() => toggleDoor(key)}
+                                                                className="accent-sky-500" />
+                                                            {door.name || `Door ${door.doorNo}`} (#{Number(door.doorNo)})
+                                                        </label>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                            </div>
+                        )}
+                        <p className="mt-2 text-[10px] text-slate-500">Only checked doors will be requested. Saving is not proof of physical programming.</p>
+                    </div>
+
                     <div>
                         <label className="mono text-[10px] tracking-widest text-slate-500">CARD NUMBERS · 10 DIGITS EACH</label>
                         <textarea
@@ -674,7 +736,7 @@ function EditEmployeeModal({ employee, onClose }) {
 
                 <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-5">
                     <button onClick={onClose} className="rounded-full border border-white/10 px-5 py-2.5 mono text-[10px] tracking-widest text-slate-400 hover:text-white">CANCEL</button>
-                    <button onClick={submit} disabled={saving || !cardsValid || !name.trim()}
+                    <button onClick={submit} disabled={saving || !cardsValid || !name.trim() || (customRights ? selectedDoors.length === 0 : !accessLevelId)}
                         className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
                         {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                         {saving ? 'SAVING…' : 'SAVE CHANGES'}
@@ -686,10 +748,12 @@ function EditEmployeeModal({ employee, onClose }) {
 }
 
 export default function Employees() {
-    const { employees, deleteEmployee } = useSecurity();
+    const { employees, devices, deleteEmployee, refreshEmployees } = useSecurity();
     const [open, setOpen] = useState(false);
     const [accessLevelsOpen, setAccessLevelsOpen] = useState(false);
     const [editing, setEditing] = useState(null);
+    const [retryingId, setRetryingId] = useState(null);
+    const [syncViewId, setSyncViewId] = useState(null);
     const [query, setQuery] = useState('');
     const [faceFilter, setFaceFilter] = useState('all');
     const [levelFilter, setLevelFilter] = useState('all');
@@ -713,10 +777,33 @@ export default function Employees() {
         return matchesQuery && matchesFace && matchesLevel;
     });
 
+    const retryHardwareSync = async (emp) => {
+        const cards = emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : []);
+        if (!cards.length) {
+            toast.error('MISSING CARD', { description: 'This employee has no assigned card.' });
+            return;
+        }
+        setRetryingId(emp.id);
+        try {
+            const { data } = await api.post(`/employees/${emp.id}/retry-sync`);
+            toast.info('HARDWARE SYNC QUEUED', {
+                description: `${emp.name}: request queued for the selected doors. Physical confirmation appears below each card after the Gateway reports it.`,
+            });
+            await refreshEmployees();
+        } catch (e) {
+            toast.error('RETRY FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally {
+            setRetryingId(null);
+        }
+    };
+
+    const deviceMap = Object.fromEntries((devices || []).filter(d => d.gatewayDeviceId).map(d => [d.gatewayDeviceId, d]));
+    const cardDeviceIds = (emp) => Object.keys(emp.doorRights || {}).filter(id => deviceMap[id]?.type === 'card');
+
     const remove = async (emp) => {
         try {
             await deleteEmployee(emp.id);
-            toast.success('CREDENTIAL REVOKED', { description: `${emp.name} removed from the registry` });
+            toast.info('RECORD REMOVED', { description: `${emp.name} removed from V2. Physical credential revocation is not confirmed.` });
         } catch (e) {
             toast.error('DELETE FAILED', { description: 'Could not remove employee — try again' });
         }
@@ -806,6 +893,7 @@ export default function Employees() {
                                     <th className="px-4 py-3 font-medium">PERSON ID</th>
                                     <th className="px-4 py-3 font-medium">CARD NO.</th>
                                     <th className="px-4 py-3 font-medium">ROLE</th>
+                                    <th className="px-4 py-3 font-medium">CARD SYNC</th>
                                     <th className="px-4 py-3 font-medium">LEVEL</th>
                                     <th className="px-4 py-3 font-medium">FACE</th>
                                     <th className="px-4 py-3 font-medium text-right">ACTIONS</th>
@@ -814,6 +902,8 @@ export default function Employees() {
                             <tbody>
                                 {filteredEmployees.map((emp, i) => {
                                     const cards = emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : []);
+                                    const targets = cardDeviceIds(emp);
+                                    const synced = targets.filter(id => emp.hardwareDeviceStatus?.[id]?.status === 'verified');
                                     return (
                                         <motion.tr
                                             key={emp.id}
@@ -843,6 +933,27 @@ export default function Employees() {
                                             </td>
                                             <td className="px-4 py-3.5 text-xs text-slate-400">{emp.role || '—'}</td>
                                             <td className="px-4 py-3.5">
+                                                <button type="button" onClick={() => setSyncViewId(syncViewId === emp.id ? null : emp.id)}
+                                                    title="Show physical card verification by controller" className="text-left">
+                                                    <span className={`mono text-[10px] tracking-wider ${targets.length > 0 && synced.length === targets.length ? 'text-emerald-300' : 'text-orange-300'}`}>
+                                                        {targets.length ? `${synced.length}/${targets.length} VERIFIED` : 'NO CARD DEVICE'}
+                                                    </span>
+                                                    <p className="text-[9px] text-slate-500">SHOW DEVICES</p>
+                                                </button>
+                                                {syncViewId === emp.id && (
+                                                    <div className="mt-2 min-w-[150px] space-y-1">
+                                                        {targets.map(id => (
+                                                            <p key={id} className="text-[10px] text-slate-300">
+                                                                {deviceMap[id]?.name || id}: {emp.hardwareDeviceStatus?.[id]?.status || 'pending'}
+                                                                {emp.hardwareDeviceStatus?.[id]?.error && <span className="block text-orange-400">{emp.hardwareDeviceStatus[id].error}</span>}
+                                                            </p>
+                                                        ))}
+                                                        <button onClick={() => refreshEmployees().catch(() => toast.error('STATUS REFRESH FAILED'))}
+                                                            className="text-[10px] text-sky-300 underline">REFRESH STATUS</button>
+                                                    </div>
+                                                )}
+                                            </td>
+                                            <td className="px-4 py-3.5">
                                                 <span className="mono rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1 text-[9px] tracking-wider text-sky-300">{emp.level || '—'}</span>
                                             </td>
                                             <td className="px-4 py-3.5">
@@ -867,6 +978,18 @@ export default function Employees() {
                                                             <Copy size={13} />
                                                         </button>
                                                     )}
+                                                    {cards.length > 0 && emp.source !== 'iVMS-4200' && (
+                                                        <button
+                                                            data-testid={`retry-sync-${emp.id}`}
+                                                            onClick={() => retryHardwareSync(emp)}
+                                                            disabled={retryingId === emp.id}
+                                                            title="Re-queue this employee on assigned devices (does not prove physical access)"
+                                                            className="flex items-center gap-1.5 rounded-md border border-orange-400/25 px-3 py-2 mono text-[9px] tracking-widest text-orange-300 hover:bg-orange-400/10 disabled:opacity-40"
+                                                        >
+                                                            <RefreshCw size={12} className={retryingId === emp.id ? 'animate-spin' : ''} />
+                                                            {retryingId === emp.id ? 'QUEUEING' : 'RETRY SYNC'}
+                                                        </button>
+                                                    )}
                                                     <button
                                                         data-testid={`edit-employee-${emp.id}`}
                                                         onClick={() => setEditing(emp)}
@@ -882,7 +1005,7 @@ export default function Employees() {
                                 })}
                                 {filteredEmployees.length === 0 && (
                                     <tr>
-                                        <td colSpan="7" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
+                                        <td colSpan="8" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
                                             NO ENROLLMENTS MATCH THE CURRENT FILTERS
                                         </td>
                                     </tr>

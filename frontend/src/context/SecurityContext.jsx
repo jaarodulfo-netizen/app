@@ -119,6 +119,12 @@ export function SecurityProvider({ children }) {
         [logEvent, user],
     );
 
+    const refreshEmployees = useCallback(async () => {
+        const { data } = await api.get('/employees');
+        setEmployees(data || []);
+        return data || [];
+    }, []);
+
     const addEmployee = useCallback(async (emp) => {
         const { data } = await api.post('/employees', emp);
         setEmployees((prev) => [data, ...(prev || [])]);
@@ -202,6 +208,7 @@ export function SecurityProvider({ children }) {
                 closeDoor,
                 silenceDoor,
                 addEmployee,
+                refreshEmployees,
                 updateEmployee,
                 deleteEmployee,
                 refreshCameras,
