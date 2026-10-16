@@ -1270,6 +1270,70 @@ async def gateway_socket(websocket: WebSocket):
                 )
                 continue
 
+            if msg_type == "card-sync":
+                # Gateway is authenticated through GATEWAY_TOKEN. Accept
+                # read-back reports only for a matching, current request.
+                card = str(msg.get("cardNo") or "").strip()
+                person_id = str(msg.get("personId") or "").strip()
+                device_id = str(msg.get("deviceId") or "").strip()
+                request_token = str(msg.get("syncRequestId") or "").strip()
+                state = str(msg.get("status") or "").strip()
+                numbers = msg.get("doors")
+                if (not re.fullmatch(r"[0-9]{10}", card) or
+                        person_id != card or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", device_id) or
+                        not re.fullmatch(r"[0-9a-f]{32}", request_token) or
+                        state not in {"verified", "failed"} or
+                        not isinstance(numbers, list) or
+                        not numbers or len(numbers) > 256 or
+                        any(not isinstance(d, int) or d < 1 or d > 256 for d in numbers)):
+                    logger.warning("Rejected malformed native card confirmation from Gateway")
+                    continue
+                employee = await db.employees.find_one({
+                    "cardNo": card, "personId": person_id, "syncRequestId": request_token,
+                })
+                if not employee:
+                    logger.info("Ignored obsolete or unknown native card confirmation for %s", device_id)
+                    continue
+                authorized = normalize_door_rights(employee.get("doorRights"))
+                expected = sorted(set(authorized.get(device_id) or []))
+                actual = sorted(set(numbers))
+                if not expected or expected != actual:
+                    logger.warning("Rejected native card confirmation with mismatched doors on %s", device_id)
+                    continue
+                # Verification means native NET_DVR_GET_CARD readback matched
+                # the expected Normal Card, dates, doors and plan, not just
+                # 'the Gateway accepted an async job'.
+                report = {
+                    "status": state, "cardNo": card, "doors": actual,
+                    "at": datetime.now(timezone.utc),
+                    "error": str(msg.get("error") or "")[:250] if state == "failed" else None,
+                }
+                await db.employees.update_one(
+                    {"_id": employee["_id"], "syncRequestId": request_token},
+                    {"$set": {f"hardwareDeviceStatus.{device_id}": report}},
+                )
+                statuses = (await db.employees.find_one(
+                    {"_id": employee["_id"]}, {"hardwareDeviceStatus": 1}
+                ) or {}).get("hardwareDeviceStatus") or {}
+                card_devices = []
+                for target in authorized:
+                    device = await db.devices.find_one({"gatewayDeviceId": target}, {"type": 1})
+                    if device and device.get("type") == "card":
+                        card_devices.append(target)
+                if card_devices and all((statuses.get(target) or {}).get("status") == "verified"
+                                        for target in card_devices):
+                    await db.employees.update_one(
+                        {"_id": employee["_id"], "syncRequestId": request_token},
+                        {"$set": {"hardwareCardSync": "verified",
+                                  "hardwareCardVerifiedAt": datetime.now(timezone.utc)}},
+                    )
+                elif state == "failed":
+                    await db.employees.update_one(
+                        {"_id": employee["_id"], "syncRequestId": request_token},
+                        {"$set": {"hardwareCardSync": "partial_error"}},
+                    )
+                continue
+
             if msg_type == "result":
                 request_id = msg.get("requestId")
                 fut = gateway_pending.get(request_id)
@@ -1587,10 +1651,19 @@ async def sync_employee_to_gateway(employee: dict):
             raise HTTPException(status_code=502, detail="Face photo could not be loaded for device enrollment") from e
 
     person_id = str(employee["personId"])
+    # Fresh request tokens make stale queued Gateway jobs ineligible to
+    # report a success for a later, different set of doors.
+    sync_request_id = uuid.uuid4().hex
+    await db.employees.update_one(
+        {"_id": employee["_id"]},
+        {"$set": {"syncRequestId": sync_request_id, "hardwareDeviceStatus": {},
+                  "hardwareCardSync": "pending"}},
+    )
     return await send_gateway_command({
         "kind": "person.upsert",
         "person": {
             "id": person_id,
+            "syncRequestId": sync_request_id,
             "name": str(employee.get("name") or "").strip(),
             "userType": "normal",
             "validFrom": str(employee["validFrom"]),
@@ -1665,7 +1738,7 @@ async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(ge
             await sync_employee_to_gateway(employee)
             await db.employees.update_one(
                 {"_id": employee["_id"]},
-                {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": datetime.now(timezone.utc)}},
+                {"$set": {"hardwareSync": "queued", "hardwareQueuedAt": datetime.now(timezone.utc)}},
             )
         except Exception as e:
             logger.warning("Access-level resync failed for %s: %s", employee.get("name"), e)
