@@ -1510,8 +1510,11 @@ async def ensure_hikvision_employee_identity(employee: dict) -> dict:
         from zoneinfo import ZoneInfo
         zone = ZoneInfo("America/Monterrey")
         created = employee.get("created_at")
-        if isinstance(created, datetime) and created.tzinfo:
-            started_day = created.astimezone(zone).date()
+        if isinstance(created, datetime):
+            # Motor decodes BSON UTC timestamps as naive by default; treat as UTC,
+            # not as the Windows/Railway server-local timezone.
+            created_utc = created if created.tzinfo else created.replace(tzinfo=timezone.utc)
+            started_day = created_utc.astimezone(zone).date()
         else:
             started_day = datetime.now(zone).date()
         try:
