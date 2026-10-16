@@ -1462,7 +1462,8 @@ async def sync_employee_to_gateway(employee: dict):
             photo_bytes, _ = await get_object(employee["photoPath"])
             credentials.append({"type": "face", "imageBase64": base64.b64encode(photo_bytes).decode("ascii")})
         except Exception as e:
-            logger.warning("Could not attach enrollment face photo: %s", e)
+            logger.exception("Face photo could not be loaded for enrollment")
+            raise HTTPException(status_code=502, detail="Face photo could not be loaded for device enrollment") from e
 
     person_id = str(employee.get("personId") or employee.get("_id"))
     return await send_gateway_command({
@@ -1584,6 +1585,8 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     doc = body.model_dump()
     doc["cardNo"] = card_no
     doc["cardNos"] = [card_no]
+    doc["faceSync"] = False  # A photo is not proof of device enrollment.
+    doc["faceMatch"] = None
     doc["doorRights"] = door_rights
     if access_level:
         doc["level"] = access_level.get("name") or body.level
@@ -1603,10 +1606,10 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     synced_at = datetime.now(timezone.utc)
     await db.employees.update_one(
         {"_id": r.inserted_id},
-        {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": synced_at}},
+        {"$set": {"hardwareSync": "queued", "hardwareQueuedAt": synced_at}},
     )
-    doc["hardwareSync"] = "synced"
-    doc["hardwareSyncedAt"] = synced_at
+    doc["hardwareSync"] = "queued"
+    doc["hardwareQueuedAt"] = synced_at
     return doc_id(doc)
 
 
@@ -1654,6 +1657,10 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
     elif "doorRights" in updates:
         updates["doorRights"] = normalize_door_rights(updates.get("doorRights"))
 
+    if "photoPath" in updates and updates["photoPath"] != existing.get("photoPath"):
+        updates["faceSync"] = False
+        updates["faceMatch"] = None
+
     updates["updated_at"] = datetime.now(timezone.utc)
     updates["updated_by"] = user["email"]
     updates["hardwareSync"] = "pending"
@@ -1672,10 +1679,10 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
     synced_at = datetime.now(timezone.utc)
     await db.employees.update_one(
         {"_id": oid},
-        {"$set": {"hardwareSync": "synced", "hardwareSyncedAt": synced_at}, "$unset": {"hardwareSyncError": ""}},
+        {"$set": {"hardwareSync": "queued", "hardwareQueuedAt": synced_at}, "$unset": {"hardwareSyncError": ""}},
     )
-    doc["hardwareSync"] = "synced"
-    doc["hardwareSyncedAt"] = synced_at
+    doc["hardwareSync"] = "queued"
+    doc["hardwareQueuedAt"] = synced_at
     return doc_id(doc)
 
 
