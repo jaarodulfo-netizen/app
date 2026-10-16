@@ -6,6 +6,12 @@ import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
 import { api, fileUrl, formatApiError } from '../context/AuthContext';
 
+const localISODate = (yearsAhead = 0) => {
+    const d = new Date();
+    d.setFullYear(d.getFullYear() + yearsAhead);
+    return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0')].join('-');
+};
+
 function Avatar({ emp, size = 'h-14 w-14' }) {
     if (emp.photoPath) {
         return <img src={fileUrl(emp.photoPath)} alt={emp.name} className={`${size} rounded-lg object-cover ring-1 ring-[#ea7f2b]/40`} />;
@@ -325,11 +331,10 @@ function EnrollModal({ open, onClose }) {
     const [accessLevels, setAccessLevels] = useState([]);
     const [accessLevelId, setAccessLevelId] = useState('');
     const [cardNo, setCardNo] = useState('');
+    const [validFrom, setValidFrom] = useState(localISODate());
+    const [validUntil, setValidUntil] = useState(localISODate(3));
     const [photo, setPhoto] = useState(null);
     const [photoPreview, setPhotoPreview] = useState(null);
-    const [faceState, setFaceState] = useState('idle');
-    const [progress, setProgress] = useState(0);
-    const [match, setMatch] = useState(null);
     const [saving, setSaving] = useState(false);
     const fileRef = useRef(null);
 
@@ -340,28 +345,12 @@ function EnrollModal({ open, onClose }) {
             .catch(() => setAccessLevels([]));
     }, [open]);
 
-    useEffect(() => {
-        if (faceState !== 'scanning') return;
-        const t = setInterval(() => {
-            setProgress((p) => {
-                if (p >= 100) {
-                    clearInterval(t);
-                    setFaceState('done');
-                    setMatch((97 + Math.random() * 2.8).toFixed(1));
-                    return 100;
-                }
-                return p + 4;
-            });
-        }, 110);
-        return () => clearInterval(t);
-    }, [faceState]);
-
     const reset = () => {
         setName(''); setRole(''); setAccessLevelId(''); setCardNo('');
+        setValidFrom(localISODate()); setValidUntil(localISODate(3));
         setPhoto(null);
         if (photoPreview) URL.revokeObjectURL(photoPreview);
         setPhotoPreview(null);
-        setFaceState('idle'); setProgress(0); setMatch(null);
     };
 
     const pickPhoto = (e) => {
@@ -383,17 +372,20 @@ function EnrollModal({ open, onClose }) {
                 photoPath = data.path;
             }
             const selectedLevel = accessLevels.find((item) => item.id === accessLevelId);
-            await addEmployee({
+            const enrolled = await addEmployee({
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 cardNo,
-                faceSync: true,
-                faceMatch: match,
+                faceSync: false,
+                validFrom,
+                validUntil,
                 level: selectedLevel?.name || 'CUSTOM',
                 accessLevelId,
                 photoPath,
             });
-            toast.success('PROFILE SYNCHRONIZED', { description: `${name} saved to registry · ready to push to scanners` });
+            toast.success(enrolled.hardwareSync === 'queued' ? 'ENROLLMENT QUEUED' : 'GATEWAY ACCEPTED', {
+                description: `${name} saved. Hardware card and face enrollment remain unverified.`,
+            });
             reset();
             onClose();
         } catch (e) {
@@ -403,7 +395,7 @@ function EnrollModal({ open, onClose }) {
         }
     };
 
-    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) && faceState === 'done' && !!accessLevelId;
+    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) && !!accessLevelId && !!validFrom && validUntil >= validFrom;
 
     return (
         <AnimatePresence>
@@ -503,6 +495,13 @@ function EnrollModal({ open, onClose }) {
 
                                     </div>
                                 </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div><label className="mono text-[10px] text-slate-500">VALID FROM</label>
+                                        <input type="date" value={validFrom} onChange={(e) => setValidFrom(e.target.value)} className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-2 py-2 text-xs text-slate-100" /></div>
+                                    <div><label className="mono text-[10px] text-slate-500">VALID UNTIL</label>
+                                        <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-2 py-2 text-xs text-slate-100" /></div>
+                                </div>
+                                <p className="text-[10px] text-slate-500">Default 3 years, normal card. Access-level door permissions remain unchanged.</p>
                             </div>
 
                             <div className="relative flex flex-col items-center justify-center rounded-xl border border-sky-500/20 bg-black/50 bg-grid p-5 min-h-[300px] overflow-hidden">
@@ -511,56 +510,14 @@ function EnrollModal({ open, onClose }) {
                                 <span className="absolute left-3 bottom-3 h-4 w-4 border-b-2 border-l-2 border-sky-400/60" />
                                 <span className="absolute right-3 bottom-3 h-4 w-4 border-b-2 border-r-2 border-sky-400/60" />
 
-                                {faceState === 'idle' && (
-                                    <>
-                                        {photoPreview ? (
-                                            <img src={photoPreview} alt="Face source" className="h-24 w-24 rounded-full object-cover ring-2 ring-sky-400/50" />
-                                        ) : (
-                                            <ScanFace size={52} className="text-sky-500/70" />
-                                        )}
-                                        <p className="mono text-[10px] tracking-[0.3em] text-slate-500 mt-4 text-center">BIOMETRIC CAPTURE READY</p>
-                                        <button
-                                            data-testid="face-capture-btn"
-                                            onClick={() => { setFaceState('scanning'); setProgress(0); }}
-                                            className="mt-5 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-xs text-[#04121f] transition-colors duration-200 hover:bg-cyan-400"
-                                        >
-                                            START FACE CAPTURE
-                                        </button>
-                                    </>
-                                )}
-                                {faceState === 'scanning' && (
-                                    <>
-                                        {photoPreview ? (
-                                            <img src={photoPreview} alt="Scanning" className="h-24 w-24 rounded-full object-cover ring-2 ring-cyan-400/70" />
-                                        ) : (
-                                            <ScanFace size={52} className="text-cyan-300" />
-                                        )}
-                                        <div className="absolute inset-x-6 h-0.5 bg-gradient-to-r from-transparent via-cyan-400 to-transparent scan-line shadow-[0_0_16px_rgba(34,211,238,0.8)]" />
-                                        <p className="mono text-xs tracking-[0.3em] text-cyan-300 mt-5 tabular-nums">SCANNING · {progress}%</p>
-                                        <p className="mono text-[9px] tracking-widest text-slate-600 mt-2">EXTRACTING 512-DIM EMBEDDING</p>
-                                    </>
-                                )}
-                                {faceState === 'done' && (
-                                    <>
-                                        <div className="flex h-16 w-16 items-center justify-center rounded-full border border-emerald-400/50 bg-emerald-400/10">
-                                            <Check size={28} className="text-emerald-300" />
-                                        </div>
-                                        <p className="mono text-[10px] tracking-[0.3em] text-emerald-300 mt-4">EMBEDDING EXTRACTED</p>
-                                        <p className="mono text-xs tracking-widest text-slate-400 mt-2">REFERENCE MATCH · {match}%</p>
-                                        <button
-                                            data-testid="face-recapture-btn"
-                                            onClick={() => { setFaceState('scanning'); setProgress(0); }}
-                                            className="mt-4 mono text-[10px] tracking-widest text-sky-400 hover:text-cyan-300 transition-colors duration-200"
-                                        >
-                                            RECAPTURE
-                                        </button>
-                                    </>
-                                )}
+                                {photoPreview ? <img src={photoPreview} alt="Employee photo" className="h-24 w-24 rounded-full object-cover ring-2 ring-sky-400/50" /> : <ScanFace size={52} className="text-sky-500/70" />}
+                                <p className="mono text-[10px] tracking-[0.2em] text-sky-300 mt-4 text-center">{photoPreview ? 'PHOTO READY TO SEND' : 'NO FACE PHOTO UPLOADED'}</p>
+                                <p className="text-xs text-slate-400 mt-3 text-center">A photo is not verified face enrollment. Confirm enrollment on the physical terminal.</p>
                             </div>
                         </div>
 
                         <div className="mt-7 flex items-center justify-between gap-3 border-t border-white/5 pt-5">
-                            <p className="mono text-[9px] tracking-widest text-slate-600 hidden sm:block">STORED IN REGISTRY · PUSH TO SCANNERS FROM THE CARD</p>
+                            <p className="mono text-[9px] tracking-widest text-slate-600 hidden sm:block">GATEWAY ACCEPTANCE IS NOT DEVICE VERIFICATION</p>
                             <button
                                 data-testid="enroll-submit-btn"
                                 onClick={submit}
@@ -589,6 +546,8 @@ function EditEmployeeModal({ employee, onClose }) {
     const [accessLevelId, setAccessLevelId] = useState(employee?.accessLevelId || '');
     const initialCards = employee?.cardNos?.length ? employee.cardNos : (employee?.cardNo ? [employee.cardNo] : []);
     const [cardsText, setCardsText] = useState(initialCards.join(', '));
+    const [validFrom, setValidFrom] = useState(employee?.validFrom || localISODate());
+    const [validUntil, setValidUntil] = useState(employee?.validUntil || localISODate(3));
     const [photo, setPhoto] = useState(null);
     const [photoPreview, setPhotoPreview] = useState(employee?.photoPath ? fileUrl(employee.photoPath) : null);
     const [saving, setSaving] = useState(false);
@@ -636,16 +595,21 @@ function EditEmployeeModal({ employee, onClose }) {
                 const { data } = await api.post('/upload/photo', fd);
                 photoPath = data.path;
             }
-            await updateEmployee(employee.id, {
+            const updated = await updateEmployee(employee.id, {
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 level: accessLevels.find((item) => item.id === accessLevelId)?.name || employee?.level || 'CUSTOM',
                 accessLevelId,
                 cardNos: parsedCards,
                 cardNo: parsedCards[0] || '',
+                validFrom,
+                validUntil,
+                faceSync: false,
                 photoPath,
             });
-            toast.success('EMPLOYEE UPDATED', { description: `${name} saved successfully` });
+            toast.success(updated.hardwareSync === 'queued' ? 'UPDATE QUEUED' : 'GATEWAY ACCEPTED', {
+                description: `${name} updated. Device enrollment remains unverified.`,
+            });
             onClose();
         } catch (e) {
             toast.error('UPDATE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
@@ -722,11 +686,18 @@ function EditEmployeeModal({ employee, onClose }) {
                             Separate multiple cards with commas.
                         </p>
                     </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div><label className="mono text-[10px] text-slate-500">VALID FROM</label>
+                            <input type="date" value={validFrom} onChange={(e) => setValidFrom(e.target.value)} className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-xs text-slate-100" /></div>
+                        <div><label className="mono text-[10px] text-slate-500">VALID UNTIL</label>
+                            <input type="date" value={validUntil} onChange={(e) => setValidUntil(e.target.value)} className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-xs text-slate-100" /></div>
+                    </div>
+                    <p className="text-[10px] text-slate-500">Normal card; existing access-level permissions are unchanged.</p>
                 </div>
 
                 <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-5">
                     <button onClick={onClose} className="rounded-full border border-white/10 px-5 py-2.5 mono text-[10px] tracking-widest text-slate-400 hover:text-white">CANCEL</button>
-                    <button onClick={submit} disabled={saving || !cardsValid || !name.trim()}
+                    <button onClick={submit} disabled={saving || !cardsValid || !name.trim() || !validFrom || validUntil < validFrom}
                         className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
                         {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                         {saving ? 'SAVING…' : 'SAVE CHANGES'}
@@ -759,8 +730,8 @@ export default function Employees() {
         const matchesQuery = !query.trim() || haystack.includes(query.trim().toLowerCase());
         const matchesFace =
             faceFilter === 'all' ||
-            (faceFilter === 'synced' && emp.faceSync) ||
-            (faceFilter === 'pending' && !emp.faceSync);
+            (faceFilter === 'synced' && !!emp.photoPath) ||
+            (faceFilter === 'pending' && !emp.photoPath);
         const matchesLevel = levelFilter === 'all' || emp.level === levelFilter;
         return matchesQuery && matchesFace && matchesLevel;
     });
@@ -815,8 +786,8 @@ export default function Employees() {
                             className="rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-400/60"
                         >
                             <option value="all">ALL FACE STATUS</option>
-                            <option value="synced">FACE SYNCED</option>
-                            <option value="pending">FACE PENDING</option>
+                            <option value="synced">PHOTO ON FILE</option>
+                            <option value="pending">NO FACE PHOTO</option>
                         </select>
                         <select
                             value={levelFilter}
@@ -859,7 +830,8 @@ export default function Employees() {
                                     <th className="px-4 py-3 font-medium">CARD NO.</th>
                                     <th className="px-4 py-3 font-medium">ROLE</th>
                                     <th className="px-4 py-3 font-medium">LEVEL</th>
-                                    <th className="px-4 py-3 font-medium">FACE</th>
+                                    <th className="px-4 py-3 font-medium">FACE PHOTO</th>
+                                    <th className="px-4 py-3 font-medium">HARDWARE</th>
                                     <th className="px-4 py-3 font-medium text-right">ACTIONS</th>
                                 </tr>
                             </thead>
@@ -880,7 +852,7 @@ export default function Employees() {
                                                     <div className="min-w-0">
                                                         <p className="truncate text-sm font-semibold text-slate-200">{emp.name}</p>
                                                         <p className="mono mt-0.5 text-[9px] tracking-wider text-slate-600">
-                                                            {emp.source === 'iVMS-4200' ? 'IMPORTED FROM IVMS' : 'KERMA V2'}
+                                                            {emp.hardwareSync === 'error' ? 'GATEWAY ERROR' : emp.hardwareSync === 'pending' || emp.hardwareSync === 'queued' ? 'SYNC QUEUED' : 'NOT DEVICE VERIFIED'}
                                                         </p>
                                                     </div>
                                                 </div>
@@ -899,12 +871,27 @@ export default function Employees() {
                                             </td>
                                             <td className="px-4 py-3.5">
                                                 <span className={`mono rounded border px-2 py-1 text-[9px] tracking-wider ${
-                                                    emp.faceSync
-                                                        ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-300'
+                                                    emp.photoPath ? 'border-sky-400/30 bg-sky-400/10 text-sky-300'
                                                         : 'border-orange-400/30 bg-orange-400/10 text-orange-300'
                                                 }`}>
-                                                    {emp.faceSync ? 'SYNCED' : 'PENDING'}
+                                                    {emp.photoPath ? 'PHOTO ON FILE' : 'NO PHOTO'}
                                                 </span>
+                                            </td>
+                                            <td className="px-4 py-3.5">
+                                                <span className={`mono rounded border px-2 py-1 text-[9px] tracking-wider ${
+                                                    emp.hardwareSync === 'error'
+                                                        ? 'border-red-400/30 bg-red-400/10 text-red-300'
+                                                        : emp.hardwareSync === 'queued'
+                                                            ? 'border-amber-400/30 bg-amber-400/10 text-amber-300'
+                                                            : 'border-slate-500/30 bg-slate-500/10 text-slate-400'
+                                                }`}>
+                                                    {emp.hardwareSync === 'error' ? 'SYNC ERROR' : emp.hardwareSync === 'queued' ? 'QUEUED' : 'NOT VERIFIED'}
+                                                </span>
+                                                {Array.isArray(emp.gatewayQueuedFor) && emp.gatewayQueuedFor.length > 0 && (
+                                                    <p className="mt-1 text-[9px] text-slate-500" title={emp.gatewayQueuedFor.join(', ')}>
+                                                        {emp.gatewayQueuedFor.length} DEVICE(S) QUEUED
+                                                    </p>
+                                                )}
                                             </td>
                                             <td className="px-4 py-3.5">
                                                 <div className="flex justify-end gap-2">
@@ -936,7 +923,7 @@ export default function Employees() {
                                 })}
                                 {filteredEmployees.length === 0 && (
                                     <tr>
-                                        <td colSpan="7" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
+                                        <td colSpan="8" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
                                             NO ENROLLMENTS MATCH THE CURRENT FILTERS
                                         </td>
                                     </tr>
