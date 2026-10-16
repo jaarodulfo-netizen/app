@@ -1077,6 +1077,11 @@ async def gateway_event_doc(event: dict) -> dict:
                 {"employeeNoString": person_id},
             ]
         })
+    if not employee and person_id.isascii() and person_id.isdigit() and int(person_id) > 0:
+        # Hikvision SDK numeric IDs may drop leading zeroes in events.
+        # The V2 Person ID remains the exact 10-digit card string.
+        match_numeric_id = "^0*" + str(int(person_id)) + "$"
+        employee = await db.employees.find_one({"personId": {"$regex": match_numeric_id}})
     if not employee and card_no:
         employee = await db.employees.find_one({"$or": [{"cardNo": card_no}, {"cardNos": card_no}]})
     if employee:
@@ -1455,52 +1460,81 @@ async def resolve_employee_door_rights(access_level_id: Optional[str], explicit:
     return normalize_door_rights(explicit), None
 
 
-# KERMA_NATIVE_CARD_AUTOSYNC_V4
-# Allocate stable eight-digit Hikvision identifiers for NEW enrollments only.
-# Never reuse a historical iVMS ID or infer one from a Mongo ObjectId.
+# KERMA_NATIVE_CARD_AUTOSYNC_V5
+# For new Kerma V2 staff, the canonical Hikvision Person ID is the full
+# 10-digit primary CARD STRING, including leading zeros.
+# HCNetSDK DWORD card records may represent this numerically; 0008512250
+# therefore corresponds to SDK numeric 8512250 without changing stored ID.
 async def ensure_hikvision_employee_identity(employee: dict) -> dict:
     from datetime import timedelta
     from pymongo import ReturnDocument
 
+    card_number = str(employee.get("cardNo") or "").strip()
+    if not re.fullmatch(r"[0-9]{10}", card_number):
+        raise HTTPException(status_code=400, detail="Card must contain exactly ten ASCII digits")
+    numeric_id = int(card_number)
+    if not 1 <= numeric_id <= 4294967295:
+        raise HTTPException(status_code=400, detail="Card number is outside HCNetSDK numeric Person ID range")
+
     current_id = str(employee.get("personId") or "").strip()
-    if not current_id:
-        # Counter operations are atomic in MongoDB; this range stays separate
-        # from the historic imported eight-digit iVMS identifiers.
-        await db.hikvision_sequences.update_one(
-            {"_id": "native_employee_number"},
-            {"$setOnInsert": {"value": 10000000}},
-            upsert=True,
-        )
-        for _ in range(20):
-            entry = await db.hikvision_sequences.find_one_and_update(
-                {"_id": "native_employee_number"},
-                {"$inc": {"value": 1}},
-                return_document=ReturnDocument.AFTER,
+    if employee.get("source") == "iVMS-4200":
+        # Never change a legacy iVMS identifier just because its card differs.
+        if not current_id or not current_id.isascii() or not current_id.isdigit():
+            raise HTTPException(status_code=409, detail="Imported iVMS Person ID is missing or invalid")
+        if not employee.get("validFrom") or not employee.get("validTo"):
+            raise HTTPException(
+                status_code=409,
+                detail="Existing iVMS user validity must be provided; it cannot be replaced by a new three-year term",
             )
-            candidate = str(entry["value"]).zfill(8)
-            if int(candidate) > 4294967295:
-                raise HTTPException(status_code=409, detail="Hikvision numeric ID range exhausted")
-            if await db.employees.find_one({"personId": candidate}):
-                continue
-            await db.employees.update_one(
-                {"_id": employee["_id"], "$or": [
+    else:
+        if current_id and current_id != card_number:
+            raise HTTPException(
+                status_code=409,
+                detail="V2 Person ID and primary card differ; refusing to reassign an existing hardware identity",
+            )
+
+        # Reject reuse of an already imported/assigned Person ID, even if the
+        # other record stores a numerically equivalent non-padded ID.
+        normalized_pattern = "^0*" + str(numeric_id) + "$"
+        collision = await db.employees.find_one({
+            "_id": {"$ne": employee["_id"]},
+            "$or": [
+                {"personId": {"$regex": normalized_pattern}},
+                {"employeeNo": {"$regex": normalized_pattern}},
+                {"employeeNoString": {"$regex": normalized_pattern}},
+                {"cardNo": card_number},
+                {"cardNos": card_number},
+            ],
+        })
+        if collision:
+            raise HTTPException(status_code=409, detail="Card/Person ID already belongs to another employee")
+
+        # Unique Mongo _id reserves the numeric identity atomically for V2.
+        # Repeated retries for the SAME employee reuse this reservation.
+        reservation = await db.hikvision_person_id_reservations.find_one_and_update(
+            {"_id": str(numeric_id)},
+            {"$setOnInsert": {"employeeId": str(employee["_id"]), "cardNo": card_number}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+        if reservation.get("employeeId") != str(employee["_id"]):
+            raise HTTPException(status_code=409, detail="Person ID is already reserved for another employee")
+
+        result = await db.employees.update_one(
+            {
+                "_id": employee["_id"],
+                "$or": [
                     {"personId": {"$exists": False}},
                     {"personId": None},
                     {"personId": ""},
-                ]},
-                {"$set": {"personId": candidate}},
-            )
-            current = await db.employees.find_one({"_id": employee["_id"]})
-            current_id = str((current or {}).get("personId") or "").strip()
-            if current_id:
-                break
-        if not current_id:
-            raise HTTPException(status_code=409, detail="Could not allocate Hikvision Person ID")
-
-    if not current_id.isascii() or not current_id.isdigit() or not 1 <= int(current_id) <= 4294967295:
-        raise HTTPException(status_code=409, detail="Employee Person ID must be numeric for Hikvision SDK")
-    if await db.employees.find_one({"personId": current_id, "_id": {"$ne": employee["_id"]}}):
-        raise HTTPException(status_code=409, detail="Hikvision Person ID already assigned to another employee")
+                    {"personId": card_number},
+                ],
+            },
+            {"$set": {"personId": card_number}},
+        )
+        if result.matched_count != 1:
+            raise HTTPException(status_code=409, detail="Person ID changed during enrollment")
+        current_id = card_number
 
     begin = employee.get("validFrom")
     finish = employee.get("validTo")
@@ -1664,8 +1698,10 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
     card_no = str(body.cardNo or "").strip()
     if not card_no.isdigit() or len(card_no) != 10:
         raise HTTPException(status_code=400, detail="Card number must be exactly 10 digits, including leading zeros")
-    if await db.employees.find_one({"cardNo": card_no}):
+    if await db.employees.find_one({"$or": [{"cardNo": card_no}, {"cardNos": card_no}]}):
         raise HTTPException(status_code=409, detail="This card number is already assigned")
+    if body.personId and str(body.personId).strip() != card_no:
+        raise HTTPException(status_code=400, detail="For new V2 employees, Person ID must equal the full card number")
 
     door_rights, access_level = await resolve_employee_door_rights(body.accessLevelId, body.doorRights)
     if not door_rights:
@@ -1732,6 +1768,18 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
             raise HTTPException(status_code=400, detail="Card number must be exactly 10 digits")
         updates["cardNo"] = card
         updates["cardNos"] = [card] if card else []
+
+    if existing.get("source") != "iVMS-4200":
+        existing_id = str(existing.get("personId") or "").strip()
+        new_card = str(updates.get("cardNo", existing.get("cardNo") or "")).strip()
+        proposed_id = str(updates.get("personId") or "").strip() if "personId" in updates else existing_id
+        if existing_id and (new_card != existing_id or proposed_id != existing_id):
+            raise HTTPException(
+                status_code=409,
+                detail="Changing a V2 card/Person ID requires a controlled hardware identity migration",
+            )
+        if not existing_id and proposed_id and proposed_id != new_card:
+            raise HTTPException(status_code=409, detail="V2 Person ID must equal primary card number")
 
     if updates.get("name") is not None:
         updates["name"] = updates["name"].strip()
