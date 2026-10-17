@@ -143,7 +143,7 @@ export default function Attendance() {
 
     const exportCsv = async () => {
         let exportData = report;
-        if (!exportData?.rows?.length) {
+        if (exportData?.start !== reportStart || exportData?.end !== reportEnd) {
             try {
                 const { data: result } = await api.get('/attendance/report', { params: { start: reportStart, end: reportEnd } });
                 exportData = result;
@@ -302,7 +302,7 @@ export default function Attendance() {
                     <p className="mt-2 font-head text-3xl font-black text-slate-100">{data.summary?.worked || '00:00'}</p>
                 </div>
                 <div className="rounded-xl border border-[#ea7f2b]/15 bg-[#ea7f2b]/[0.04] p-5">
-                    <div className="flex items-center gap-2 text-[#fee396]"><TimerReset size={17} /><span className="mono text-[10px] tracking-widest">OVERTIME</span></div>
+                    <div className="flex items-center gap-2 text-[#fee396]"><TimerReset size={17} /><span className="mono text-[10px] tracking-widest">POTENTIAL OVERTIME</span></div>
                     <p className="mt-2 font-head text-3xl font-black text-slate-100">{data.summary?.overtime || '00:00'}</p>
                 </div>
                 <div className="rounded-xl border border-violet-400/15 bg-violet-400/[0.04] p-5">
