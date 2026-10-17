@@ -20,7 +20,9 @@ def test_face_is_real_jpeg_regardless_of_upload_format(fmt):
     with Image.open(BytesIO(converted)) as result:
         assert result.format == "JPEG"
         assert result.mode == "RGB"
-        assert max(result.size) <= 1280
+        assert result.width <= 1920
+        assert result.height <= 1080
+        assert result.width >= 60 and result.height >= 60
 
 
 def test_transparent_png_composites_on_white():
@@ -39,3 +41,10 @@ def test_corrupt_photo_is_rejected():
 def test_empty_photo_is_rejected():
     with pytest.raises(ValueError, match="nonempty"):
         encode_hikvision_face_jpeg(b"")
+
+
+def test_tiny_face_is_rejected():
+    photo = BytesIO()
+    Image.new("RGB", (40, 40), "white").save(photo, format="JPEG")
+    with pytest.raises(ValueError, match="at least 60"):
+        encode_hikvision_face_jpeg(photo.getvalue())
