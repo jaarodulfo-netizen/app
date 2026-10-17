@@ -879,13 +879,18 @@ async def _attendance_sessions(start_day, end_day, device):
             "$gte": query_local_start.astimezone(timezone.utc),
             "$lt": query_local_end.astimezone(timezone.utc),
         },
-        "result": "granted",
         "$or": attendance_device_match(device),
     }
     attendance_docs = await db.attendance_events.find(query).sort("time", 1).to_list(20000)
     legacy_docs = await db.events.find(query).sort("time", 1).to_list(20000)
     docs_by_key = {}
     for doc in attendance_docs + legacy_docs:
+        result = str(doc.get("result") or "").lower()
+        raw_punch = classify_attendance_punch(doc.get("raw_gateway_event"))
+        # Some attendance firmwares report a valid explicit IN/OUT/break
+        # as a status event. Do not count denied or alarm records as punches.
+        if result != "granted" and not (result == "status" and raw_punch):
+            continue
         key = str(doc.get("dedupeKey") or doc.get("_id"))
         docs_by_key[key] = doc
     docs = sorted(docs_by_key.values(), key=lambda d: d.get("time") or datetime.min.replace(tzinfo=timezone.utc))
