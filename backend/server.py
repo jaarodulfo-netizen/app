@@ -890,6 +890,8 @@ async def _attendance_sessions(start_day, end_day, device):
         docs_by_key[key] = doc
     docs = sorted(docs_by_key.values(), key=lambda d: d.get("time") or datetime.min.replace(tzinfo=timezone.utc))
 
+    # Prefer the original person/card identity over name: two employees may
+    # share a display name. Numeric Hikvision person IDs can lose leading zeroes.
     by_person = {}
     for e in docs:
         person = str(e.get("person") or "").strip()
@@ -898,17 +900,30 @@ async def _attendance_sessions(start_day, end_day, device):
         local_t = _local_dt(e.get("time"))
         if not local_t:
             continue
-        by_person.setdefault(person, []).append({
+        person_id = str(e.get("personId") or "").strip()
+        card_no = str(e.get("cardNo") or "").strip()
+        if person_id and person_id.isascii() and person_id.isdecimal():
+            identity = ("person_id", str(int(person_id)))
+        elif person_id:
+            identity = ("person_id", person_id)
+        elif card_no:
+            identity = ("card", card_no)
+        else:
+            identity = ("name", person.casefold())
+        bucket = by_person.setdefault(identity, {"person": person, "scans": []})
+        bucket["scans"].append({
             "time": local_t,
             "method": e.get("method"),
             "detail": e.get("detail"),
-            "cardNo": e.get("cardNo"),
+            "cardNo": card_no,
+            "personId": person_id,
             "punch": classify_attendance_punch(e.get("raw_gateway_event")),
         })
 
     sessions = []
-    for person, scans in by_person.items():
-        scans.sort(key=lambda x: x["time"])
+    for bucket in by_person.values():
+        person = bucket["person"]
+        scans = sorted(bucket["scans"], key=lambda x: x["time"])
         i = 0
         while i < len(scans):
             first = scans[i]["time"]
@@ -930,6 +945,8 @@ async def _attendance_sessions(start_day, end_day, device):
             if start_day <= shift_day <= end_day:
                 sessions.append({
                     "person": person,
+                    "person_id": scans[i].get("personId") or None,
+                    "card_no": scans[i].get("cardNo") or None,
                     "shift": shift,
                     "shift_date": shift_day.isoformat(),
                     "scheduled_start": scheduled_start.isoformat(),
