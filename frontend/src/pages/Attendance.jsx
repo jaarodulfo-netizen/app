@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Clock3, Download, Fingerprint, RefreshCw, Save, ScanFace, TimerReset, Users, Search, ChevronDown, ChevronUp, ImageOff } from 'lucide-react';
+import { Clock3, Download, Fingerprint, RefreshCw, Save, ScanFace, TimerReset, Users, Search, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/PageHeader';
 import { useSecurity } from '@/context/SecurityContext';
@@ -504,6 +504,120 @@ export default function Attendance() {
                     </table>
                 </div>
                 <p className="mt-3 text-[11px] text-amber-200/90">Payroll caution: generic successful facial scans are not proof of a check-out or break. Potential overtime is calculated relative to eight hours and requires review/approval.</p>
+            </section>
+
+            <section className="rounded-xl border border-sky-500/15 bg-[#09101d]/90 p-5" data-testid="attendance-employee-roster">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <Users size={18} className="text-sky-300" />
+                            <h2 className="font-head text-lg font-bold text-slate-100">Personnel Attendance &amp; Payroll Hours</h2>
+                        </div>
+                        <p className="mt-2 text-xs leading-5 text-slate-400">
+                            All employees previously enrolled in V2 appear here, including those with zero scans.
+                            Each profile uses the original employee photo on file. Select a person for their daily punch details.
+                        </p>
+                        <p className="mt-1 mono text-[10px] text-slate-500">PERIOD: {reportStart} → {reportEnd} · {roster.people.length} ENROLLED STAFF · {roster.people.filter(p => p.shiftCount > 0).length} WITH SCANS</p>
+                    </div>
+                    <button type="button" onClick={exportRosterCsv} disabled={!loadedPeriod || employees === null}
+                        className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-sky-400/30 bg-sky-400/10 px-4 font-head text-xs font-bold text-sky-200 hover:bg-sky-400/15 disabled:opacity-40">
+                        <Download size={15} /> EXPORT PAYROLL HOURS CSV
+                    </button>
+                </div>
+                <div className="mt-5 flex flex-wrap gap-3">
+                    <label className="relative min-w-[230px] flex-1">
+                        <Search size={15} className="absolute left-3 top-3 text-slate-500" />
+                        <input type="search" value={rosterSearch} onChange={e => setRosterSearch(e.target.value)}
+                            placeholder="Search employee, card or Person ID"
+                            className="min-h-10 w-full rounded-lg border border-white/10 bg-[#050811] pl-9 pr-3 text-sm text-slate-200 outline-none focus:border-sky-400/50" />
+                    </label>
+                    <select value={rosterFilter} onChange={e => setRosterFilter(e.target.value)}
+                        className="min-h-10 rounded-lg border border-white/10 bg-[#050811] px-3 text-xs text-slate-200">
+                        <option value="all">ALL ENROLLED</option>
+                        <option value="with">WITH SCANS</option>
+                        <option value="without">NO SCANS</option>
+                        <option value="review">NEEDS REVIEW</option>
+                    </select>
+                </div>
+                {!loadedPeriod && <p className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-xs text-amber-200">Date range has changed. Press LOAD above to refresh before reviewing payroll.</p>}
+                {employees === null && <p className="mt-5 text-xs text-slate-400">Loading enrolled employees…</p>}
+                {employees !== null && loadedPeriod && visibleRoster.length === 0 && (
+                    <p className="mt-5 rounded-lg border border-white/10 p-5 text-xs text-slate-400">No employees match this search or attendance filter.</p>
+                )}
+                {employees !== null && loadedPeriod && (
+                    <div className="mt-5 grid grid-cols-1 gap-3 xl:grid-cols-2">
+                        {visibleRoster.map(item => {
+                            const emp = item.employee;
+                            const expanded = expandedEmployeeId === emp.id;
+                            return (
+                                <article key={emp.id} className="overflow-hidden rounded-lg border border-white/10 bg-[#050811]/80">
+                                    <button type="button" onClick={() => setExpandedEmployeeId(expanded ? null : emp.id)}
+                                        aria-expanded={expanded}
+                                        className="flex w-full items-center gap-3 px-4 py-4 text-left hover:bg-white/[0.03]">
+                                        <FacePhoto employee={emp} />
+                                        <div className="min-w-0 flex-1">
+                                            <p className="truncate text-sm font-semibold text-slate-100">{emp.name}</p>
+                                            <p className="mt-1 truncate mono text-[10px] text-slate-400">{emp.role || emp.level || 'EMPLOYEE'} · ID {emp.personId || emp.cardNo || '—'}</p>
+                                            <p className={`mt-1 mono text-[9px] ${emp.photoPath ? 'text-sky-300' : 'text-amber-300'}`}>
+                                                {emp.photoPath ? 'PHOTO IN V2 (NOT PROOF OF FACIAL ENROLLMENT)' : 'NO PHOTO IN V2'}
+                                            </p>
+                                        </div>
+                                        <div className="shrink-0 text-right">
+                                            <p className={`mono text-[10px] ${item.shiftCount === 0 ? 'text-slate-400' : item.requiresReview ? 'text-amber-300' : 'text-emerald-300'}`}>
+                                                {!item.shiftCount ? 'NO SCANS' : item.requiresReview ? 'REVIEW' : 'PUNCHES VERIFIED'}
+                                            </p>
+                                            {expanded ? <ChevronUp size={16} className="ml-auto mt-2 text-slate-500" /> : <ChevronDown size={16} className="ml-auto mt-2 text-slate-500" />}
+                                        </div>
+                                    </button>
+                                    <div className="grid grid-cols-4 gap-2 border-t border-white/5 px-4 py-3 text-center">
+                                        <div><p className="mono text-[9px] text-slate-500">DAYS</p><p className="mt-1 text-sm font-bold text-white">{item.dayCount}</p></div>
+                                        <div><p className="mono text-[9px] text-slate-500">WORKED*</p><p className="mt-1 text-sm font-bold text-white">{secondsToHHMM(item.workedSeconds)}</p></div>
+                                        <div><p className="mono text-[9px] text-slate-500">BREAKS</p><p className="mt-1 text-sm font-bold text-sky-200">{secondsToHHMM(item.breakSeconds)}</p></div>
+                                        <div><p className="mono text-[9px] text-slate-500">POT. OT</p><p className="mt-1 text-sm font-bold text-amber-200">{secondsToHHMM(item.overtimeSeconds)}</p></div>
+                                    </div>
+                                    {expanded && (
+                                        <div className="space-y-3 border-t border-white/10 px-4 py-4">
+                                            {!item.rows.length && <p className="text-xs text-amber-200">No attendance events for this employee during the selected payroll period. This is not proof of absence: confirm device connectivity and enrollment.</p>}
+                                            {item.rows.map((shift, idx) => (
+                                                <div key={`${shift.shift_date}-${shift.shift}-${idx}`} className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                                        <strong className="text-slate-100">{shift.shift_date} · Shift {shift.shift}</strong>
+                                                        <span title={shift.warning || ''} className={shift.punches_confirmed ? 'text-emerald-300' : 'text-amber-300'}>
+                                                            {shift.punches_confirmed ? 'CONFIRMED PUNCHES' : 'REVIEW REQUIRED'}
+                                                        </span>
+                                                    </div>
+                                                    <p className="mt-2 text-xs text-slate-400">
+                                                        IN {fmt(shift.first_in)} · OUT {fmt(shift.last_out)} ·
+                                                        BREAK {shift.breaks || '00:00'} · WORKED {shift.worked} · POTENTIAL OT {shift.overtime}
+                                                    </p>
+                                                    {(shift.punches || []).length > 0 && (
+                                                        <div className="mt-2 flex flex-wrap gap-2">
+                                                            {shift.punches.map((p, n) => (
+                                                                <span key={n} className="rounded border border-white/10 px-2 py-1 mono text-[10px] text-slate-300">
+                                                                    {fmt(p.time)} · {String(p.type || 'unclassified').replace(/_/g, ' ').toUpperCase()}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                    {shift.warning && <p className="mt-2 text-[11px] text-amber-300">{shift.warning}</p>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </article>
+                            );
+                        })}
+                    </div>
+                )}
+                {loadedPeriod && roster.unmatched.length > 0 && (
+                    <p className="mt-4 rounded-lg border border-amber-400/20 bg-amber-400/5 px-4 py-3 text-xs text-amber-200">
+                        {roster.unmatched.length} session(s) could not be linked safely to a V2 employee. They remain in the period report and CSV for review.
+                    </p>
+                )}
+                <p className="mt-4 text-[11px] leading-5 text-slate-500">
+                    *Worked hours can be provisional when the Hikvision event does not identify explicit IN/OUT punches.
+                    This is an attendance-hours report, not a salary or payroll payment calculation. Monetary payroll requires configured pay rates, paid/unpaid break policy and overtime approvals.
+                </p>
             </section>
         </div>
     );
