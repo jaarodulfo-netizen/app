@@ -25,6 +25,8 @@ def encode_hikvision_face_jpeg(source: bytes) -> bytes:
         with Image.open(BytesIO(source)) as original:
             if original.width * original.height > MAX_SOURCE_PIXELS:
                 raise ValueError("Face photo dimensions are too large")
+            if original.width < 60 or original.height < 60:
+                raise ValueError("Face photo dimensions must be at least 60 x 60")
             if getattr(original, "is_animated", False):
                 raise ValueError("Animated face photos are not supported")
             original.load()
@@ -35,9 +37,12 @@ def encode_hikvision_face_jpeg(source: bytes) -> bytes:
                 rgb.paste(rgba, mask=rgba.getchannel("A"))
             else:
                 rgb = oriented.convert("RGB")
-            for maximum_side in (1280, 960, 720, 600):
+            # Kerma Gateway face.ts requires a real JPEG <= 200 KB, with
+            # dimensions between 60x60 and 1920x1080 (height is significant
+            # for portraits; a simple max-side-only resize is insufficient).
+            for bounding_box in ((1920, 1080), (1440, 900), (1200, 800), (900, 640), (640, 480)):
                 sized = rgb.copy()
-                sized.thumbnail((maximum_side, maximum_side), Image.Resampling.LANCZOS)
+                sized.thumbnail(bounding_box, Image.Resampling.LANCZOS)
                 for quality in (88, 78, 68, 58):
                     out = BytesIO()
                     sized.save(out, "JPEG", quality=quality, optimize=True)
