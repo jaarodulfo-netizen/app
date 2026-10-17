@@ -27,6 +27,7 @@ import hmac
 import shutil
 import json
 import base64
+from hikvision_image import encode_hikvision_face_jpeg
 from datetime import datetime, timezone, timedelta, time
 from zoneinfo import ZoneInfo
 
@@ -1642,13 +1643,30 @@ async def sync_employee_to_gateway(employee: dict):
         cards = [employee.get("cardNo")] if employee.get("cardNo") else []
     cards = [str(c).strip() for c in cards if str(c or "").strip()]
     credentials = [{"type": "card", "value": c} for c in cards]
-    if employee.get("photoPath"):
+    # Do not distribute a biometric image when the employee has not been
+    # explicitly authorized for any facial terminal in the V2 device registry.
+    door_rights = normalize_door_rights(employee.get("doorRights"))
+    face_targets = await db.devices.count_documents({
+        "type": "face", "gatewayDeviceId": {"$in": list(door_rights)}
+    })
+    if employee.get("photoPath") and face_targets:
         try:
             photo_bytes, _ = await get_object(employee["photoPath"])
-            credentials.append({"type": "face", "imageBase64": base64.b64encode(photo_bytes).decode("ascii")})
         except Exception as e:
             logger.exception("Face photo could not be loaded for enrollment")
             raise HTTPException(status_code=502, detail="Face photo could not be loaded for device enrollment") from e
+        try:
+            jpeg_bytes = encode_hikvision_face_jpeg(photo_bytes)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid face photo for Hikvision: {exc}",
+            ) from exc
+        credentials.append({
+            "type": "face",
+            "imageBase64": base64.b64encode(jpeg_bytes).decode("ascii"),
+            "contentType": "image/jpeg",
+        })
 
     person_id = str(employee["personId"])
     # Fresh request tokens make stale queued Gateway jobs ineligible to
@@ -1668,7 +1686,7 @@ async def sync_employee_to_gateway(employee: dict):
             "userType": "normal",
             "validFrom": str(employee["validFrom"]),
             "validTo": str(employee["validTo"]),
-            "doorRights": normalize_door_rights(employee.get("doorRights")),
+            "doorRights": door_rights,
         },
         "credentials": credentials,
     })
