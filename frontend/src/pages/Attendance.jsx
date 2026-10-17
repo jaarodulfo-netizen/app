@@ -128,7 +128,7 @@ export default function Attendance() {
             const { data: result } = await api.get('/attendance/report', { params: { start, end } });
             setReport(result);
         } catch (e) {
-            toast.error('REPORT UNAVAILABLE', { description: e?.response?.data?.detail || 'Could not load payroll attendance report' });
+            toast.error('REPORT UNAVAILABLE', { description: e?.response?.data?.detail || 'Could not load attendance hours report' });
         } finally {
             setReportLoading(false);
         }
@@ -185,8 +185,8 @@ export default function Attendance() {
         const headers = [
             'Person ID', 'Employee', 'Position', 'Photo in V2', 'Period Start', 'Period End',
             'Days with Scans', 'Shift Sessions', 'Worked Hours (Provisional if Not Verified)',
-            'Regular Hours', 'Recorded Unpaid Breaks (Only Explicit Punches)',
-            'Potential Overtime (Not Approved)', 'Scans', 'Needs Review', 'Status'
+            'Regular Hours', 'Recorded Break Time (Only Explicit Punches)',
+            'Potential Extra Hours (Review Required)', 'Scans', 'Needs Review', 'Status'
         ];
         const rows = employeeData.people.map(p => [
             p.employee.personId || p.employee.cardNo || '', p.employee.name, p.employee.role || '',
@@ -200,10 +200,10 @@ export default function Attendance() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `kerma-payroll-attendance-roster-${reportStart}-to-${reportEnd}.csv`;
+        link.download = `kerma-attendance-hours-roster-${reportStart}-to-${reportEnd}.csv`;
         link.click();
         URL.revokeObjectURL(url);
-        toast.success('PERSONNEL PAYROLL-HOURS CSV EXPORTED');
+        toast.success('PERSONNEL HOURS CSV EXPORTED');
     };
 
     const exportCsv = async () => {
@@ -278,7 +278,7 @@ export default function Attendance() {
     return (
         <div className="space-y-7" data-testid="attendance-page">
             <PageHeader
-                eyebrow="TIME & ATTENDANCE // PAYROLL"
+                eyebrow="TIME & ATTENDANCE // HOURS"
                 title="Attendance"
                 description="Attendance Main punch records, shift A/B/C, confirmed breaks and provisional overtime. Overnight Shift C remains on its starting date."
             />
@@ -332,7 +332,7 @@ export default function Attendance() {
                         <div className="flex items-center justify-between rounded-lg border border-[#ea7f2b]/15 bg-[#ea7f2b]/[0.04] px-3 py-2"><span className="mono text-xs text-[#fee396]">B</span><span className="mono text-xs text-slate-300">15:00 → 23:00</span></div>
                         <div className="flex items-center justify-between rounded-lg border border-violet-400/15 bg-violet-400/[0.04] px-3 py-2"><span className="mono text-xs text-violet-300">C</span><span className="mono text-xs text-slate-300">23:00 → 07:00 +1 DAY</span></div>
                     </div>
-                    <p className="mt-3 text-[11px] leading-5 text-slate-500">A night employee who clocks in before 23:00 and clocks out the next morning remains on the same Shift C payroll day.</p>
+                    <p className="mt-3 text-[11px] leading-5 text-slate-500">A night employee who clocks in before 23:00 and clocks out the next morning remains on the same Shift C attendance day.</p>
                 </div>
             </section>
 
@@ -367,7 +367,7 @@ export default function Attendance() {
                     <p className="mt-2 font-head text-3xl font-black text-slate-100">{data.summary?.worked || '00:00'}</p>
                 </div>
                 <div className="rounded-xl border border-[#ea7f2b]/15 bg-[#ea7f2b]/[0.04] p-5">
-                    <div className="flex items-center gap-2 text-[#fee396]"><TimerReset size={17} /><span className="mono text-[10px] tracking-widest">POTENTIAL OVERTIME</span></div>
+                    <div className="flex items-center gap-2 text-[#fee396]"><TimerReset size={17} /><span className="mono text-[10px] tracking-widest">POTENTIAL EXTRA HOURS</span></div>
                     <p className="mt-2 font-head text-3xl font-black text-slate-100">{data.summary?.overtime || '00:00'}</p>
                 </div>
                 <div className="rounded-xl border border-violet-400/15 bg-violet-400/[0.04] p-5">
@@ -380,9 +380,9 @@ export default function Attendance() {
                 <div className="flex items-center justify-between border-b border-white/5 px-5 py-4">
                     <div className="flex items-center gap-2">
                         <Clock3 size={16} className="text-sky-300" />
-                        <p className="font-head text-sm font-bold text-slate-100">Daily Payroll Attendance</p>
+                        <p className="font-head text-sm font-bold text-slate-100">Daily Attendance Hours</p>
                     </div>
-                    <p className="mono text-[9px] tracking-widest text-slate-600">REGULAR REFERENCE 08:00 · OT SUBJECT TO APPROVAL</p>
+                    <p className="mono text-[9px] tracking-widest text-slate-600">REGULAR REFERENCE 08:00 · EXTRA HOURS REQUIRE REVIEW</p>
                 </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-left">
@@ -395,7 +395,7 @@ export default function Attendance() {
                                 <th className="px-4 py-3 font-medium">LAST OUT</th>
                                 <th className="px-4 py-3 font-medium">WORKED</th>
                                 <th className="px-4 py-3 font-medium">REGULAR</th>
-                                <th className="px-4 py-3 font-medium">POTENTIAL OT</th>
+                                <th className="px-4 py-3 font-medium">POTENTIAL EXTRA HOURS</th>
                                 <th className="px-4 py-3 font-medium">BREAKS</th>
                                 <th className="px-4 py-3 font-medium">SCANS</th>
                                 <th className="px-4 py-3 font-medium">STATUS</th>
@@ -437,7 +437,7 @@ export default function Attendance() {
             <section className="rounded-xl border border-[#ea7f2b]/20 bg-[#09101d]/90 p-5">
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                     <div>
-                        <p className="font-head text-sm font-bold text-slate-100">Payroll Period Report</p>
+                        <p className="font-head text-sm font-bold text-slate-100">Attendance Hours Report</p>
                         <p className="mt-1 text-xs text-slate-500">Reports by week, half-month, month, or custom range. Unclassified scans are marked for review, never silently treated as confirmed exits or breaks.</p>
                         <div className="mt-4 flex flex-wrap gap-2">
                             <button onClick={() => applyRange(weekRange())} className="rounded-lg border border-sky-400/25 bg-sky-400/[0.06] px-3 py-2 mono text-[10px] tracking-wider text-sky-300 hover:bg-sky-400/10">THIS WEEK</button>
@@ -470,7 +470,7 @@ export default function Attendance() {
                     <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">PERIOD</p><p className="mt-1 text-sm text-slate-200">{fmtDate(reportStart)} → {fmtDate(reportEnd)}</p></div>
                     <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">SHIFT RECORDS</p><p className="mt-1 font-head text-xl font-bold text-slate-100">{report.summary?.present || 0}</p></div>
                     <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">REGULAR</p><p className="mt-1 font-head text-xl font-bold text-emerald-300">{report.summary?.regular || '00:00'}</p></div>
-                    <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">POTENTIAL OVERTIME</p><p className="mt-1 font-head text-xl font-bold text-[#fee396]">{report.summary?.overtime || '00:00'}</p></div>
+                    <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">POTENTIAL EXTRA HOURS</p><p className="mt-1 font-head text-xl font-bold text-[#fee396]">{report.summary?.overtime || '00:00'}</p></div>
                     <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">CONFIRMED BREAKS</p><p className="mt-1 font-head text-xl font-bold text-sky-300">{report.summary?.breaks || '00:00'}</p></div>
                     <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">NEEDS REVIEW</p><p className="mt-1 font-head text-xl font-bold text-amber-300">{report.summary?.needs_review || 0}</p></div>
                 </div>
@@ -478,7 +478,7 @@ export default function Attendance() {
                     <table className="w-full min-w-[1080px] text-left">
                         <thead className="border-b border-white/10 bg-white/[0.03]">
                             <tr className="mono text-[9px] tracking-wider text-slate-400">
-                                {['DATE','EMPLOYEE','SHIFT','FIRST IN','LAST OUT','BREAKS','WORKED','REGULAR','POTENTIAL OT','SCANS','STATUS'].map(h => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}
+                                {['DATE','EMPLOYEE','SHIFT','FIRST IN','LAST OUT','BREAKS','WORKED','REGULAR','POTENTIAL EXTRA HOURS','SCANS','STATUS'].map(h => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}
                             </tr>
                         </thead>
                         <tbody>
@@ -503,7 +503,7 @@ export default function Attendance() {
                         </tbody>
                     </table>
                 </div>
-                <p className="mt-3 text-[11px] text-amber-200/90">Payroll caution: generic successful facial scans are not proof of a check-out or break. Potential overtime is calculated relative to eight hours and requires review/approval.</p>
+                <p className="mt-3 text-[11px] text-amber-200/90">Important: a generic successful facial scan does not confirm check-out or break. Extra hours are a provisional difference against an 8-hour reference, subject to review.</p>
             </section>
 
             <section className="rounded-xl border border-sky-500/15 bg-[#09101d]/90 p-5" data-testid="attendance-employee-roster">
@@ -511,7 +511,7 @@ export default function Attendance() {
                     <div>
                         <div className="flex items-center gap-2">
                             <Users size={18} className="text-sky-300" />
-                            <h2 className="font-head text-lg font-bold text-slate-100">Personnel Attendance &amp; Payroll Hours</h2>
+                            <h2 className="font-head text-lg font-bold text-slate-100">Employee Attendance &amp; Hours</h2>
                         </div>
                         <p className="mt-2 text-xs leading-5 text-slate-400">
                             All employees previously enrolled in V2 appear here, including those with zero scans.
@@ -521,7 +521,7 @@ export default function Attendance() {
                     </div>
                     <button type="button" onClick={exportRosterCsv} disabled={!loadedPeriod || employees === null}
                         className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-sky-400/30 bg-sky-400/10 px-4 font-head text-xs font-bold text-sky-200 hover:bg-sky-400/15 disabled:opacity-40">
-                        <Download size={15} /> EXPORT PAYROLL HOURS CSV
+                        <Download size={15} /> EXPORT HOURS CSV
                     </button>
                 </div>
                 <div className="mt-5 flex flex-wrap gap-3">
@@ -539,7 +539,7 @@ export default function Attendance() {
                         <option value="review">NEEDS REVIEW</option>
                     </select>
                 </div>
-                {!loadedPeriod && <p className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-xs text-amber-200">Date range has changed. Press LOAD above to refresh before reviewing payroll.</p>}
+                {!loadedPeriod && <p className="mt-5 rounded-lg border border-amber-400/20 bg-amber-400/5 p-4 text-xs text-amber-200">Date range has changed. Press LOAD above to refresh before reviewing attendance hours.</p>}
                 {employees === null && <p className="mt-5 text-xs text-slate-400">Loading enrolled employees…</p>}
                 {employees !== null && loadedPeriod && visibleRoster.length === 0 && (
                     <p className="mt-5 rounded-lg border border-white/10 p-5 text-xs text-slate-400">No employees match this search or attendance filter.</p>
@@ -577,7 +577,7 @@ export default function Attendance() {
                                     </div>
                                     {expanded && (
                                         <div className="space-y-3 border-t border-white/10 px-4 py-4">
-                                            {!item.rows.length && <p className="text-xs text-amber-200">No attendance events for this employee during the selected payroll period. This is not proof of absence: confirm device connectivity and enrollment.</p>}
+                                            {!item.rows.length && <p className="text-xs text-amber-200">No attendance events for this employee during the selected attendance period. This is not proof of absence: confirm device connectivity and enrollment.</p>}
                                             {item.rows.map((shift, idx) => (
                                                 <div key={`${shift.shift_date}-${shift.shift}-${idx}`} className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
                                                     <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -588,7 +588,7 @@ export default function Attendance() {
                                                     </div>
                                                     <p className="mt-2 text-xs text-slate-400">
                                                         IN {fmt(shift.first_in)} · OUT {fmt(shift.last_out)} ·
-                                                        BREAK {shift.breaks || '00:00'} · WORKED {shift.worked} · POTENTIAL OT {shift.overtime}
+                                                        BREAK {shift.breaks || '00:00'} · WORKED {shift.worked} · POTENTIAL EXTRA HOURS {shift.overtime}
                                                     </p>
                                                     {(shift.punches || []).length > 0 && (
                                                         <div className="mt-2 flex flex-wrap gap-2">
@@ -616,7 +616,7 @@ export default function Attendance() {
                 )}
                 <p className="mt-4 text-[11px] leading-5 text-slate-500">
                     *Worked hours can be provisional when the Hikvision event does not identify explicit IN/OUT punches.
-                    This is an attendance-hours report, not a salary or payroll payment calculation. Monetary payroll requires configured pay rates, paid/unpaid break policy and overtime approvals.
+                    This section records hours only. No salaries, amounts, deductions or payments are calculated. Unclassified punches and extra time must be reviewed before treating them as final.
                 </p>
             </section>
         </div>
