@@ -906,6 +906,8 @@ async def _attendance_sessions(start_day, end_day, device):
             identity = ("person_id", str(int(person_id)))
         elif person_id:
             identity = ("person_id", person_id)
+        elif card_no and card_no.isascii() and card_no.isdecimal():
+            identity = ("person_id", str(int(card_no)))
         elif card_no:
             identity = ("card", card_no)
         else:
