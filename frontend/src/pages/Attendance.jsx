@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Clock3, Download, Fingerprint, RefreshCw, Save, ScanFace, TimerReset, Users } from 'lucide-react';
+import { Clock3, Download, Fingerprint, RefreshCw, Save, ScanFace, TimerReset, Users, Search, ChevronDown, ChevronUp, ImageOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/PageHeader';
 import { useSecurity } from '@/context/SecurityContext';
-import { api, useAuth } from '@/context/AuthContext';
+import { api, fileUrl, useAuth } from '@/context/AuthContext';
+import { buildAttendanceRoster, secondsToHHMM } from '@/lib/attendanceRoster';
 
 function localDateString(d = new Date()) {
     const y = d.getFullYear();
@@ -58,11 +59,22 @@ function previousMonthRange(base = new Date()) {
 }
 
 function csvCell(value) {
-    return `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const raw = String(value ?? '');
+    // Prevent spreadsheet apps interpreting employee names as formulas.
+    const safe = /^[\s]*[=+@-]/.test(raw) ? `'${raw}` : raw;
+    return `"${safe.replace(/"/g, '""')}"`;
+}
+
+function FacePhoto({ employee }) {
+    if (!employee?.photoPath) {
+        const initials = String(employee?.name || '?').trim().split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase();
+        return <div className="h-14 w-14 shrink-0 rounded-lg bg-slate-700/50 flex items-center justify-center font-bold text-sky-200" title="No photograph saved in V2">{initials || '?'}</div>;
+    }
+    return <img src={fileUrl(employee.photoPath)} alt={employee.name} className="h-14 w-14 shrink-0 rounded-lg object-cover ring-1 ring-sky-500/25" loading="lazy" />;
 }
 
 export default function Attendance() {
-    const { devices } = useSecurity();
+    const { devices, employees, refreshEmployees } = useSecurity();
     const { user } = useAuth();
     const [date, setDate] = useState(() => localDateString());
     const [selected, setSelected] = useState('');
@@ -75,6 +87,21 @@ export default function Attendance() {
     const [reportEnd, setReportEnd] = useState(initialRange[1]);
     const [report, setReport] = useState({ rows: [], summary: {} });
     const [reportLoading, setReportLoading] = useState(false);
+    const [rosterSearch, setRosterSearch] = useState('');
+    const [rosterFilter, setRosterFilter] = useState('all');
+    const [expandedEmployeeId, setExpandedEmployeeId] = useState(null);
+    const loadedPeriod = report?.start === reportStart && report?.end === reportEnd;
+    const periodRows = useMemo(() => loadedPeriod ? (report.rows || []) : [], [loadedPeriod, report.rows]);
+    const roster = useMemo(() => buildAttendanceRoster(employees || [], periodRows), [employees, periodRows]);
+    const visibleRoster = useMemo(() => roster.people.filter(item => {
+        const e = item.employee;
+        const searchText = `${e.name || ''} ${e.personId || ''} ${e.cardNo || ''} ${e.role || ''}`.toLocaleLowerCase();
+        const matchesName = searchText.includes(rosterSearch.trim().toLocaleLowerCase());
+        const matchesStatus = rosterFilter === 'all' || (rosterFilter === 'with' && item.shiftCount > 0)
+            || (rosterFilter === 'without' && item.shiftCount === 0)
+            || (rosterFilter === 'review' && item.requiresReview > 0);
+        return matchesName && matchesStatus;
+    }), [roster.people, rosterSearch, rosterFilter]);
 
     const facialDevices = useMemo(() => (devices || []).filter((d) => d.type === 'face'), [devices]);
 
@@ -118,6 +145,7 @@ export default function Attendance() {
 
     useEffect(() => {
         loadReport(initialRange[0], initialRange[1]);
+        refreshEmployees?.().catch(() => toast.error('EMPLOYEE REGISTRY UNAVAILABLE'));
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -139,6 +167,43 @@ export default function Attendance() {
         setReportStart(range[0]);
         setReportEnd(range[1]);
         loadReport(range[0], range[1]);
+    };
+
+    const exportRosterCsv = async () => {
+        let current = report;
+        if (current?.start !== reportStart || current?.end !== reportEnd) {
+            try {
+                const res = await api.get('/attendance/report', { params: { start: reportStart, end: reportEnd } });
+                current = res.data;
+                setReport(current);
+            } catch (err) {
+                toast.error('EXPORT FAILED', { description: err?.response?.data?.detail || 'Could not load period' });
+                return;
+            }
+        }
+        const employeeData = buildAttendanceRoster(employees || [], current?.rows || []);
+        const headers = [
+            'Person ID', 'Employee', 'Position', 'Photo in V2', 'Period Start', 'Period End',
+            'Days with Scans', 'Shift Sessions', 'Worked Hours (Provisional if Not Verified)',
+            'Regular Hours', 'Recorded Unpaid Breaks (Only Explicit Punches)',
+            'Potential Overtime (Not Approved)', 'Scans', 'Needs Review', 'Status'
+        ];
+        const rows = employeeData.people.map(p => [
+            p.employee.personId || p.employee.cardNo || '', p.employee.name, p.employee.role || '',
+            p.employee.photoPath ? 'YES' : 'NO', reportStart, reportEnd, p.dayCount, p.shiftCount,
+            secondsToHHMM(p.workedSeconds), secondsToHHMM(p.regularSeconds),
+            secondsToHHMM(p.breakSeconds), secondsToHHMM(p.overtimeSeconds), p.scanCount,
+            p.requiresReview, !p.shiftCount ? 'NO SCANS' : p.requiresReview ? 'REVIEW REQUIRED' : 'PUNCHES VERIFIED'
+        ]);
+        const csv = [headers, ...rows].map(row => row.map(csvCell).join(',')).join('\r\n');
+        const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `kerma-payroll-attendance-roster-${reportStart}-to-${reportEnd}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+        toast.success('PERSONNEL PAYROLL-HOURS CSV EXPORTED');
     };
 
     const exportCsv = async () => {
