@@ -923,7 +923,14 @@ export default function Employees() {
                                                     </div>
                                                 </div>
                                             </td>
-                                            <td className="px-4 py-3.5 mono text-xs text-slate-400">{emp.personId || '—'}</td>
+                                            <td className="px-4 py-3.5 mono text-xs text-slate-400">
+                                                {emp.personId || '—'}
+                                                <p className="mt-1 text-[9px] text-slate-500" title="Validity recorded in V2; facial hardware must confirm it separately">
+                                                    {emp.validFrom && emp.validTo
+                                                        ? `VALID: ${String(emp.validFrom).slice(0, 10)} → ${String(emp.validTo).slice(0, 10)}`
+                                                        : 'VALIDITY NOT SET'}
+                                                </p>
+                                            </td>
                                             <td className="px-4 py-3.5">
                                                 <div className="flex flex-wrap gap-1.5 max-w-[280px]">
                                                     {cards.length ? cards.map((card) => (
