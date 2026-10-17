@@ -904,7 +904,6 @@ async def _attendance_sessions(start_day, end_day, device):
             "detail": e.get("detail"),
             "cardNo": e.get("cardNo"),
             "punch": classify_attendance_punch(e.get("raw_gateway_event")),
-            "method": e.get("method"),
         })
 
     sessions = []
