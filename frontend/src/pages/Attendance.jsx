@@ -47,6 +47,16 @@ function semiMonthRange(base = new Date(), half = null) {
     ];
 }
 
+function monthRange(base = new Date()) {
+    return [
+        localDateString(new Date(base.getFullYear(), base.getMonth(), 1)),
+        localDateString(new Date(base.getFullYear(), base.getMonth() + 1, 0)),
+    ];
+}
+function previousMonthRange(base = new Date()) {
+    return monthRange(new Date(base.getFullYear(), base.getMonth() - 1, 1));
+}
+
 function csvCell(value) {
     return `"${String(value ?? '').replace(/"/g, '""')}"`;
 }
@@ -154,7 +164,11 @@ export default function Attendance() {
             'Last Out',
             'Worked',
             'Regular',
-            'Overtime',
+            'Potential Overtime',
+            'Breaks',
+            'Break Count',
+            'Verified Punches',
+            'Review Reason',
             'Scans',
             'Status',
         ];
@@ -169,6 +183,10 @@ export default function Attendance() {
             r.worked,
             r.regular,
             r.overtime,
+            r.breaks || '00:00',
+            r.break_count || 0,
+            r.punches_confirmed ? 'YES' : 'NO',
+            r.warning || '',
             r.events,
             String(r.status || '').toUpperCase(),
         ]);
@@ -197,7 +215,7 @@ export default function Attendance() {
             <PageHeader
                 eyebrow="TIME & ATTENDANCE // PAYROLL"
                 title="Attendance"
-                description="Dedicated Hikvision facial attendance with shift-aware First In / Last Out, regular hours and overtime. Overnight Shift C stays attached to the date the shift started."
+                description="Attendance Main punch records, shift A/B/C, confirmed breaks and provisional overtime. Overnight Shift C remains on its starting date."
             />
 
             <section className="grid gap-4 xl:grid-cols-[1.3fr_.7fr]">
@@ -206,7 +224,7 @@ export default function Attendance() {
                         <div className="rounded-lg border border-sky-400/20 bg-sky-400/10 p-2.5 text-sky-300"><ScanFace size={20} /></div>
                         <div>
                             <p className="font-head font-bold text-slate-100">Dedicated Attendance Facial</p>
-                            <p className="mono text-[10px] tracking-wider text-slate-500">FIRST SUCCESSFUL FACE PASS = IN · LAST PASS IN THE SHIFT SESSION = OUT</p>
+                            <p className="mono text-[10px] tracking-wider text-slate-500">ONLY EXPLICIT IN / OUT / BREAK PUNCHES ARE CONFIRMED</p>
                         </div>
                     </div>
 
@@ -299,7 +317,7 @@ export default function Attendance() {
                         <Clock3 size={16} className="text-sky-300" />
                         <p className="font-head text-sm font-bold text-slate-100">Daily Payroll Attendance</p>
                     </div>
-                    <p className="mono text-[9px] tracking-widest text-slate-600">REGULAR MAX 08:00 · EXCESS = OVERTIME</p>
+                    <p className="mono text-[9px] tracking-widest text-slate-600">REGULAR REFERENCE 08:00 · OT SUBJECT TO APPROVAL</p>
                 </div>
                 <div className="overflow-x-auto">
                     <table className="w-full text-left">
@@ -312,14 +330,15 @@ export default function Attendance() {
                                 <th className="px-4 py-3 font-medium">LAST OUT</th>
                                 <th className="px-4 py-3 font-medium">WORKED</th>
                                 <th className="px-4 py-3 font-medium">REGULAR</th>
-                                <th className="px-4 py-3 font-medium">OT</th>
+                                <th className="px-4 py-3 font-medium">POTENTIAL OT</th>
+                                <th className="px-4 py-3 font-medium">BREAKS</th>
                                 <th className="px-4 py-3 font-medium">SCANS</th>
                                 <th className="px-4 py-3 font-medium">STATUS</th>
                             </tr>
                         </thead>
                         <tbody>
                             {!loading && data.rows?.length === 0 && (
-                                <tr><td colSpan="10" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">NO ATTENDANCE RECORDS FOR THIS SHIFT DATE</td></tr>
+                                <tr><td colSpan="11" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">NO ATTENDANCE RECORDS FOR THIS SHIFT DATE</td></tr>
                             )}
                             {(data.rows || []).map((row) => (
                                 <tr key={`${row.person}-${row.shift_date}-${row.shift}`} className="border-b border-white/[0.04] last:border-0">
@@ -331,6 +350,7 @@ export default function Attendance() {
                                     <td className="px-4 py-4 mono text-xs text-slate-200">{row.worked}</td>
                                     <td className="px-4 py-4 mono text-xs text-emerald-300">{row.regular}</td>
                                     <td className="px-4 py-4 mono text-xs text-[#fee396]">{row.overtime}</td>
+                                    <td className="px-4 py-4 mono text-xs text-slate-400">{row.breaks || '00:00'}</td>
                                     <td className="px-4 py-4 mono text-xs text-slate-400">{row.events}</td>
                                     <td className="px-4 py-4">
                                         <span className={`mono rounded border px-2 py-1 text-[9px] tracking-widest ${
@@ -340,6 +360,7 @@ export default function Attendance() {
                                                     ? 'border-sky-400/30 bg-sky-400/10 text-sky-300'
                                                     : 'border-orange-400/30 bg-orange-400/10 text-orange-300'
                                         }`}>{String(row.status || '').toUpperCase()}</span>
+                                        {!row.punches_confirmed && <div title={row.warning || ''} className="mt-1 text-[9px] text-amber-300">REVIEW PUNCHES</div>}
                                     </td>
                                 </tr>
                             ))}
@@ -352,11 +373,13 @@ export default function Attendance() {
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                     <div>
                         <p className="font-head text-sm font-bold text-slate-100">Payroll Period Report</p>
-                        <p className="mt-1 text-xs text-slate-500">Export by Monday–Sunday week, first half (1–15), second half (16–month end), or any custom range.</p>
+                        <p className="mt-1 text-xs text-slate-500">Reports by week, half-month, month, or custom range. Unclassified scans are marked for review, never silently treated as confirmed exits or breaks.</p>
                         <div className="mt-4 flex flex-wrap gap-2">
                             <button onClick={() => applyRange(weekRange())} className="rounded-lg border border-sky-400/25 bg-sky-400/[0.06] px-3 py-2 mono text-[10px] tracking-wider text-sky-300 hover:bg-sky-400/10">THIS WEEK</button>
                             <button onClick={() => applyRange(semiMonthRange(new Date(), 1))} className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 mono text-[10px] tracking-wider text-slate-300 hover:bg-white/[0.06]">1–15</button>
                             <button onClick={() => applyRange(semiMonthRange(new Date(), 2))} className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 mono text-[10px] tracking-wider text-slate-300 hover:bg-white/[0.06]">16–END</button>
+                            <button onClick={() => applyRange(monthRange())} className="rounded-lg border border-sky-400/25 bg-sky-400/[0.06] px-3 py-2 mono text-[10px] tracking-wider text-sky-300 hover:bg-sky-400/10">THIS MONTH</button>
+                            <button onClick={() => applyRange(previousMonthRange())} className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 mono text-[10px] tracking-wider text-slate-300 hover:bg-white/[0.06]">LAST MONTH</button>
                         </div>
                     </div>
 
@@ -378,12 +401,44 @@ export default function Attendance() {
                     </div>
                 </div>
 
-                <div className="mt-5 grid gap-3 sm:grid-cols-4">
+                <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
                     <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">PERIOD</p><p className="mt-1 text-sm text-slate-200">{fmtDate(reportStart)} → {fmtDate(reportEnd)}</p></div>
                     <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">SHIFT RECORDS</p><p className="mt-1 font-head text-xl font-bold text-slate-100">{report.summary?.present || 0}</p></div>
                     <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">REGULAR</p><p className="mt-1 font-head text-xl font-bold text-emerald-300">{report.summary?.regular || '00:00'}</p></div>
-                    <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">OVERTIME</p><p className="mt-1 font-head text-xl font-bold text-[#fee396]">{report.summary?.overtime || '00:00'}</p></div>
+                    <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">POTENTIAL OVERTIME</p><p className="mt-1 font-head text-xl font-bold text-[#fee396]">{report.summary?.overtime || '00:00'}</p></div>
+                    <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">CONFIRMED BREAKS</p><p className="mt-1 font-head text-xl font-bold text-sky-300">{report.summary?.breaks || '00:00'}</p></div>
+                    <div className="rounded-lg border border-white/5 bg-white/[0.025] p-3"><p className="mono text-[9px] tracking-widest text-slate-600">NEEDS REVIEW</p><p className="mt-1 font-head text-xl font-bold text-amber-300">{report.summary?.needs_review || 0}</p></div>
                 </div>
+                <div className="mt-4 overflow-x-auto rounded-lg border border-white/10">
+                    <table className="w-full min-w-[1080px] text-left">
+                        <thead className="border-b border-white/10 bg-white/[0.03]">
+                            <tr className="mono text-[9px] tracking-wider text-slate-400">
+                                {['DATE','EMPLOYEE','SHIFT','FIRST IN','LAST OUT','BREAKS','WORKED','REGULAR','POTENTIAL OT','SCANS','STATUS'].map(h => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {(report.rows || []).map((row, idx) => (
+                                <tr key={`${row.person}-${row.shift_date}-${idx}`} className="border-b border-white/[0.04] text-xs text-slate-300">
+                                    <td className="px-3 py-3 whitespace-nowrap">{row.shift_date}</td>
+                                    <td className="px-3 py-3 font-semibold">{row.person}</td>
+                                    <td className="px-3 py-3">{row.shift}</td>
+                                    <td className="px-3 py-3">{fmt(row.first_in)}</td>
+                                    <td className="px-3 py-3">{fmt(row.last_out)}</td>
+                                    <td className="px-3 py-3">{row.breaks || '00:00'}</td>
+                                    <td className="px-3 py-3">{row.worked}</td>
+                                    <td className="px-3 py-3">{row.regular}</td>
+                                    <td className="px-3 py-3">{row.overtime}</td>
+                                    <td className="px-3 py-3">{row.events}</td>
+                                    <td title={row.warning || ''} className={`px-3 py-3 ${row.punches_confirmed ? 'text-emerald-300' : 'text-amber-300'}`}>{row.punches_confirmed ? 'CONFIRMED' : 'REVIEW'}</td>
+                                </tr>
+                            ))}
+                            {!reportLoading && !(report.rows || []).length && (
+                                <tr><td colSpan="11" className="px-3 py-8 text-center text-xs text-slate-500">No attendance punches for this range. Check that Attendance Main is connected.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+                <p className="mt-3 text-[11px] text-amber-200/90">Payroll caution: generic successful facial scans are not proof of a check-out or break. Potential overtime is calculated relative to eight hours and requires review/approval.</p>
             </section>
         </div>
     );
