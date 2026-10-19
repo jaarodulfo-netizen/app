@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { Search, Bell, Building2, LayoutDashboard, Map, Video, Users, Cpu, Activity, LogOut, ShieldCheck } from 'lucide-react';
+import { Search, Bell, Building2, LayoutDashboard, Map, Video, Users, Cpu, Activity, LogOut, ShieldCheck, Siren } from 'lucide-react';
 import dayjs from 'dayjs';
 import { useNow } from '../context/SecurityContext';
 import { useAuth } from '../context/AuthContext';
@@ -11,6 +11,7 @@ const MOBILE_NAV = [
     { to: '/employees', label: 'People', icon: Users },
     { to: '/devices', label: 'Devices', icon: Cpu },
     { to: '/events', label: 'Events', icon: Activity },
+    { to: '/emergency', label: 'EMERGENCY', icon: Siren, commanderOnly: true },
     { to: '/officers', label: 'Officers', icon: ShieldCheck, commanderOnly: true },
 ];
 
@@ -84,7 +85,7 @@ export function Topbar() {
                         end={item.end}
                         className={({ isActive }) =>
                             `flex items-center gap-1.5 whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs font-head font-semibold border ${
-                                isActive ? 'bg-sky-500/15 text-sky-300 border-sky-500/30' : 'text-slate-400 border-white/5'
+                                item.to === '/emergency' ? 'bg-rose-500/15 text-rose-300 border-rose-500/40' : (isActive ? 'bg-sky-500/15 text-sky-300 border-sky-500/30' : 'text-slate-400 border-white/5')
                             }`
                         }
                     >
