@@ -2222,6 +2222,185 @@ async def command_door(item_id: str, request: Request, user=Depends(get_current_
     return {"ok": True, "status": new_status, "gateway": data}
 
 
+
+# --- Emergency egress release / intentionally disabled until onsite commissioning ---
+# This is a SUPPLEMENTAL remote command facility, never the primary fire-egress system.
+# Local certified fire alarm release and mechanical egress must work without the cloud.
+class EmergencyDoorSelection(BaseModel):
+    eligible: bool
+
+
+class EmergencyReleaseConfirmation(BaseModel):
+    confirmation: str
+
+
+def emergency_release_armed() -> bool:
+    return os.environ.get("EMERGENCY_RELEASE_ENABLED", "false").lower() in {"1", "true", "yes"}
+
+
+async def emergency_egress_doors() -> list:
+    docs = await db.doors.find({"emergencyEgress": True}).sort("created_at", 1).to_list(200)
+    return docs
+
+
+def emergency_door_info(d: dict) -> dict:
+    return {
+        "id": str(d["_id"]), "name": d.get("name") or d.get("code") or "Unnamed door",
+        "code": d.get("code"), "floor": d.get("floor"), "zone": d.get("zone"),
+        "eligible": bool(d.get("emergencyEgress", False)),
+        "linked": bool(d.get("gatewayDeviceId") and d.get("doorNo")),
+        "gatewayOnline": bool(d.get("gatewayOnline")),
+        "doorNo": d.get("doorNo"),
+    }
+
+
+def validate_emergency_targets(doors: list) -> None:
+    if not doors:
+        raise HTTPException(status_code=409, detail="No emergency egress doors configured")
+    if len(doors) > 64:
+        raise HTTPException(status_code=409, detail="More than 64 egress doors: review configuration")
+    seen = set()
+    for door in doors:
+        device_id, door_no = door.get("gatewayDeviceId"), door.get("doorNo")
+        if not device_id or not isinstance(door_no, int) or door_no < 1:
+            raise HTTPException(status_code=409, detail="An emergency egress door has no valid physical controller mapping")
+        physical = (str(device_id), door_no)
+        if physical in seen:
+            raise HTTPException(status_code=409, detail="Duplicate physical emergency door mapping: correct configuration")
+        seen.add(physical)
+
+
+@api_router.get("/emergency/status")
+async def emergency_status(user=Depends(require_commander)):
+    doors = await db.doors.find({}, {
+        "name": 1, "code": 1, "floor": 1, "zone": 1, "emergencyEgress": 1,
+        "gatewayDeviceId": 1, "doorNo": 1, "gatewayOnline": 1, "created_at": 1,
+    }).sort("created_at", 1).to_list(200)
+    recent = await db.emergency_release_incidents.find(
+        {}, {"_id": 0, "actorId": 0, "sourceIp": 0, "userAgent": 0}
+    ).sort("startedAt", -1).to_list(8)
+    return {
+        "armed": emergency_release_armed(),
+        "gatewayOnline": "kerma-monterrey" in gateway_connections,
+        "doors": [emergency_door_info(d) for d in doors],
+        "recent": recent,
+        "warning": "Gateway acknowledgement is not physical door verification. Local independent fire-egress release is required.",
+    }
+
+
+@api_router.put("/emergency/doors/{item_id}")
+async def configure_emergency_door(item_id: str, body: EmergencyDoorSelection, user=Depends(require_commander)):
+    try:
+        oid = ObjectId(item_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid door ID")
+    door = await db.doors.find_one({"_id": oid})
+    if not door:
+        raise HTTPException(status_code=404, detail="Door not found")
+    if body.eligible and (not door.get("gatewayDeviceId") or not isinstance(door.get("doorNo"), int) or door.get("doorNo") < 1):
+        raise HTTPException(status_code=400, detail="Only physically mapped doors can be marked for emergency egress")
+    await db.doors.update_one({"_id": oid}, {"$set": {
+        "emergencyEgress": body.eligible, "emergencyEgressUpdatedAt": datetime.now(timezone.utc),
+        "emergencyEgressUpdatedBy": user.get("email"),
+    }})
+    await db.emergency_release_audit.insert_one({
+        "type": "configuration", "doorId": item_id, "eligible": body.eligible,
+        "actor": user.get("email"), "at": datetime.now(timezone.utc),
+    })
+    return {"ok": True, "doorId": item_id, "eligible": body.eligible}
+
+
+@api_router.post("/emergency/simulate")
+async def simulate_emergency_release(request: Request, user=Depends(require_commander)):
+    doors = await emergency_egress_doors()
+    validate_emergency_targets(doors)
+    incident_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    results = [{
+        **emergency_door_info(d), "result": "SIMULATED_NO_HARDWARE_COMMAND",
+    } for d in doors]
+    record = {
+        "incidentId": incident_id, "mode": "simulation", "state": "completed",
+        "startedAt": now, "completedAt": now, "actor": user.get("email"),
+        "actorId": str(user.get("_id")), "sourceIp": request.client.host if request.client else None,
+        "userAgent": str(request.headers.get("user-agent") or "")[:256],
+        "results": results, "count": len(results),
+    }
+    await db.emergency_release_incidents.insert_one(record)
+    return {"ok": True, "incidentId": incident_id, "mode": "simulation", "results": results}
+
+
+@api_router.post("/emergency/activate")
+async def activate_emergency_release(body: EmergencyReleaseConfirmation, request: Request, user=Depends(require_commander)):
+    # Require both server-side arming and an explicit human confirmation per activation.
+    if body.confirmation != "LIBERAR":
+        raise HTTPException(status_code=400, detail="Explicit confirmation LIBERAR is required")
+    if not emergency_release_armed():
+        raise HTTPException(status_code=423, detail="Emergency release not armed; onsite safety commissioning is required")
+    doors = await emergency_egress_doors()
+    validate_emergency_targets(doors)
+
+    # Atomic cross-process mutex: prevent overlapping commands from multiple browsers.
+    from pymongo.errors import DuplicateKeyError
+    now = datetime.now(timezone.utc)
+    try:
+        result = await db.emergency_release_mutex.update_one(
+            {"_id": "kerma-egress", "lockedUntil": {"$lte": now}},
+            {"$set": {"lockedUntil": now + timedelta(minutes=2), "actor": user.get("email")}},
+            upsert=True,
+        )
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail="Emergency release command already in progress")
+    if not result.acknowledged:
+        raise HTTPException(status_code=503, detail="Could not obtain emergency release command lock")
+
+    incident_id = uuid.uuid4().hex
+    record = {
+        "incidentId": incident_id, "mode": "live", "state": "in_progress",
+        "startedAt": now, "actor": user.get("email"),
+        "actorId": str(user.get("_id")), "sourceIp": request.client.host if request.client else None,
+        "userAgent": str(request.headers.get("user-agent") or "")[:256],
+        "count": len(doors), "results": [],
+    }
+    try:
+        await db.emergency_release_incidents.insert_one(record)
+        async def release_one(door: dict) -> dict:
+            item = emergency_door_info(door)
+            try:
+                # The Gateway understands this command already; it must be
+                # independently checked that each controller supports alwaysOpen.
+                ack = await send_gateway_command({
+                    "kind": "door.open", "deviceId": door["gatewayDeviceId"],
+                    "doorNo": door["doorNo"], "cmd": "alwaysOpen",
+                })
+                item["result"] = "GATEWAY_ACKNOWLEDGED_NOT_PHYSICALLY_VERIFIED"
+                item["gatewayResponse"] = ack
+            except Exception as exc:
+                item["result"] = "FAILED_OR_UNKNOWN"
+                item["error"] = str(exc)[:250]
+            return item
+        results = await asyncio.gather(*(release_one(d) for d in doors))
+        all_ack = all(r["result"] == "GATEWAY_ACKNOWLEDGED_NOT_PHYSICALLY_VERIFIED" for r in results)
+        await db.emergency_release_incidents.update_one({"incidentId": incident_id}, {"$set": {
+            "results": results, "state": "gateway_acknowledged" if all_ack else "attention_required",
+            "completedAt": datetime.now(timezone.utc),
+        }})
+        # Never update door.status to 'unlocked' here: physical feedback is not available.
+        return {
+            "ok": all_ack, "incidentId": incident_id, "mode": "live", "results": results,
+            "physicalVerification": "REQUIRED",
+        }
+    except Exception:
+        await db.emergency_release_incidents.update_one({"incidentId": incident_id}, {"$set": {
+            "state": "attention_required", "completedAt": datetime.now(timezone.utc),
+        }})
+        raise
+    finally:
+        await db.emergency_release_mutex.update_one(
+            {"_id": "kerma-egress"}, {"$set": {"lockedUntil": datetime.now(timezone.utc)}}
+        )
+
+
 @api_router.get("/gateway/status")
 async def gateway_status(user=Depends(get_current_user)):
     return {"online": "kerma-monterrey" in gateway_connections, "gateway_id": "kerma-monterrey"}
