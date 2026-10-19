@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Map, Video, Users, Cpu, Activity, Radio, ShieldCheck, Clock3 } from 'lucide-react';
+import { LayoutDashboard, Map, Video, Users, Cpu, Activity, Radio, ShieldCheck, Clock3, Siren } from 'lucide-react';
 import { api, useAuth } from '../context/AuthContext';
 
 const NAV = [
@@ -11,6 +11,7 @@ const NAV = [
     { to: '/devices', label: 'Access Devices', icon: Cpu, testid: 'nav-devices' },
     { to: '/events', label: 'Events Log', icon: Activity, testid: 'nav-events' },
     { to: '/attendance', label: 'Attendance', icon: Clock3, testid: 'nav-attendance' },
+    { to: '/emergency', label: 'EMERGENCY RELEASE', icon: Siren, testid: 'nav-emergency', commanderOnly: true },
     { to: '/officers', label: 'Officers', icon: ShieldCheck, testid: 'nav-officers', commanderOnly: true },
 ];
 
@@ -69,9 +70,11 @@ export function Sidebar() {
                         data-testid={item.testid}
                         className={({ isActive }) =>
                             `group flex items-center gap-3 rounded-lg px-4 py-3 text-sm font-head font-semibold tracking-wide transition-colors duration-200 border ${
-                                isActive
-                                    ? 'bg-sky-500/10 text-sky-300 border-sky-500/30 shadow-[0_0_18px_rgba(14,165,233,0.12)]'
-                                    : 'text-slate-400 border-transparent hover:text-slate-100 hover:bg-white/[0.04]'
+                                item.to === '/emergency'
+                                    ? (isActive ? 'bg-rose-500/20 text-rose-200 border-rose-500/60' : 'text-rose-300 border-rose-500/25 bg-rose-500/5 hover:bg-rose-500/15')
+                                    : (isActive
+                                        ? 'bg-sky-500/10 text-sky-300 border-sky-500/30 shadow-[0_0_18px_rgba(14,165,233,0.12)]'
+                                        : 'text-slate-400 border-transparent hover:text-slate-100 hover:bg-white/[0.04]')
                             }`
                         }
                     >
