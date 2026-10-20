@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { AlertOctagon, AlertTriangle, CheckCircle2, CircleHelp, ClipboardCheck, DoorOpen, Loader2, LockKeyhole, Radio, ShieldAlert, Siren, WifiOff, X } from 'lucide-react';
+import { AlertOctagon, AlertTriangle, CheckCircle2, CircleHelp, ClipboardCheck, DoorOpen, Loader2, LockKeyhole, Radio, RotateCcw, ShieldAlert, Siren, WifiOff, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api, formatApiError, useAuth } from '../context/AuthContext';
 
@@ -21,6 +21,8 @@ export default function EmergencyRelease() {
     const [modal, setModal] = useState(false);
     const [bulkMode, setBulkMode] = useState(null);
     const [bulkAccepted, setBulkAccepted] = useState(false);
+    const [closeTarget, setCloseTarget] = useState(null);
+    const [closeConfirmed, setCloseConfirmed] = useState(false);
     const [phrase, setPhrase] = useState('');
     const [accepted, setAccepted] = useState(false);
     const [lastResult, setLastResult] = useState(null);
@@ -53,6 +55,7 @@ export default function EmergencyRelease() {
     const invalid = selected.some((d) => !d.linked);
     const canActivate = Boolean(status?.armed && selected.length && !invalid && !busy);
     const canSimulate = Boolean(selected.length && !invalid && !busy);
+    const recentOpenSimulation = (status?.recent || []).find((item) => item.mode === 'simulation' && item.state === 'completed');
 
     const configure = async (door, eligible) => {
         if (busy || editing || status?.armed) return;
@@ -104,6 +107,33 @@ export default function EmergencyRelease() {
             await refresh();
         } catch (err) {
             toast.error('No se pudo registrar el simulacro', { description: responseError(err) });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const closeSimulation = async () => {
+        if (!closeTarget || !closeConfirmed || busy) return;
+        const incidentId = closeTarget.incidentId;
+        setBusy(true);
+        try {
+            const { data } = await api.post(`/emergency/simulations/${incidentId}/close`, {
+                confirmation: 'FINALIZAR',
+            });
+            if (data.state !== 'closed' || data.hardwareCommandsSent !== 0) {
+                throw new Error('Unexpected simulation closure response');
+            }
+            setCloseTarget(null);
+            setCloseConfirmed(false);
+            setLastResult((prev) => prev?.incidentId === incidentId
+                ? { ...prev, state: 'closed' }
+                : prev);
+            toast.success('Simulacro finalizado y registrado', {
+                description: 'No se modificó ninguna puerta ni controlador.',
+            });
+            await refresh();
+        } catch (err) {
+            toast.error('No se pudo finalizar el simulacro', { description: responseError(err) });
         } finally {
             setBusy(false);
         }
@@ -191,6 +221,32 @@ export default function EmergencyRelease() {
                         EJECUTAR SIMULACRO (SIN ABRIR)
                     </button>
                     <p className="mt-4 text-xs leading-relaxed text-amber-200/90"><AlertTriangle size={15} className="mr-1 inline" /> Nunca sustituye el sistema local independiente de evacuación. Un ACK del Gateway no demuestra liberación física.</p>
+                    <div className="mt-5 border-t border-white/10 pt-5">
+                        <p className="mb-3 font-semibold text-slate-200">Restablecimiento y cierre</p>
+                        <button
+                            type="button"
+                            data-testid="emergency-close-simulation"
+                            disabled={!recentOpenSimulation || busy}
+                            onClick={() => { setCloseConfirmed(false); setCloseTarget(recentOpenSimulation); }}
+                            className="flex w-full items-center justify-center gap-2 rounded-xl border border-sky-400/35 bg-sky-500/10 px-5 py-3 text-sm font-bold text-sky-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-35"
+                        >
+                            <RotateCcw size={18} /> FINALIZAR SIMULACRO
+                        </button>
+                        <p className="mt-2 text-xs leading-relaxed text-slate-400">
+                            Cierra el registro del simulacro más reciente. No activa ni restablece cerraduras.
+                        </p>
+                        <button
+                            type="button"
+                            disabled
+                            title="Pendiente de validación local de seguridad y pruebas físicas"
+                            className="mt-4 flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.03] px-5 py-3 text-sm font-bold text-slate-500"
+                        >
+                            <LockKeyhole size={18} /> RESTABLECER PUERTAS FÍSICAS · NO DISPONIBLE
+                        </button>
+                        <p className="mt-2 text-xs text-amber-300/90">
+                            El control físico requiere autorización de Seguridad/EHS y pruebas de los mecanismos de salida.
+                        </p>
+                    </div>
                 </section>
 
                 <section className="rounded-2xl border border-white/10 bg-[#0b1220] p-6">
@@ -220,7 +276,7 @@ export default function EmergencyRelease() {
                 <section className="rounded-xl border border-sky-500/25 bg-[#0b1220] p-5" aria-live="polite">
                     <h2 className="flex items-center gap-2 font-semibold text-white">
                         {lastResult.mode === 'simulation' ? <CheckCircle2 size={19} className="text-emerald-300" /> : <ShieldAlert size={19} className="text-amber-300" />}
-                        {lastResult.mode === 'simulation' ? 'Simulacro terminado — ninguna puerta fue accionada' : 'Orden enviada — comprobación física requerida'}
+                        {lastResult.mode === 'simulation' ? (lastResult.state === 'closed' ? 'Simulacro cerrado — ninguna puerta fue accionada' : 'Simulacro terminado — ninguna puerta fue accionada') : 'Orden enviada — comprobación física requerida'}
                     </h2>
                     <p className="mt-2 mono text-[10px] text-slate-500">Incidente {lastResult.incidentId}</p>
                     <div className="mt-4 space-y-2">
@@ -302,12 +358,50 @@ export default function EmergencyRelease() {
                                 <p className="font-semibold text-slate-200">{item.mode === 'simulation' ? 'SIMULACRO · SIN APERTURA' : 'LIBERACIÓN REAL · VERIFICACIÓN PENDIENTE'}</p>
                                 <p className="mt-1 text-slate-500">{when(item.startedAt)} · {item.actor}</p>
                             </div>
-                            <div className="mono text-slate-400">{item.count} puertas · {item.state}</div>
+                            <div className="flex flex-wrap items-center gap-3">
+                                <span className="mono text-slate-400">{item.count} puertas · {item.state === 'closed' ? 'cerrado' : item.state}</span>
+                                {item.mode === 'simulation' && item.state === 'completed' && (
+                                    <button
+                                        type="button"
+                                        data-testid={`close-simulation-${item.incidentId}`}
+                                        disabled={busy}
+                                        onClick={() => { setCloseConfirmed(false); setCloseTarget(item); }}
+                                        className="rounded-lg border border-sky-400/35 px-3 py-2 text-xs font-bold text-sky-200 hover:bg-sky-400/10 disabled:opacity-40"
+                                    >
+                                        FINALIZAR
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     ))}
                     {!status?.recent?.length && <p className="text-sm text-slate-500">No hay activaciones registradas.</p>}
                 </div>
             </section>
+
+            {closeTarget && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4" role="presentation">
+                    <div className="w-full max-w-lg rounded-2xl border-2 border-sky-500/40 bg-[#0b1220] p-6 shadow-2xl" role="dialog" aria-modal="true" aria-label="Confirmar cierre administrativo de simulacro">
+                        <h2 className="flex items-center gap-2 text-xl font-bold text-white">
+                            <RotateCcw size={22} className="text-sky-300" /> FINALIZAR SIMULACRO
+                        </h2>
+                        <p className="mt-4 break-all font-mono text-xs text-slate-400">Incidente {closeTarget.incidentId}</p>
+                        <p className="mt-4 text-sm leading-relaxed text-slate-200">
+                            Se marcará este simulacro como cerrado y se registrará el usuario responsable. No se enviarán comandos a ninguna puerta ni controlador.
+                        </p>
+                        <label className="mt-5 flex items-start gap-3 text-sm text-slate-200">
+                            <input type="checkbox" checked={closeConfirmed} onChange={(e) => setCloseConfirmed(e.target.checked)} className="mt-1 accent-sky-400" />
+                            Entiendo que se trata únicamente de un cierre administrativo y no de un restablecimiento físico.
+                        </label>
+                        <div className="mt-6 grid grid-cols-2 gap-3">
+                            <button type="button" onClick={() => { setCloseTarget(null); setCloseConfirmed(false); }} className="rounded-xl border border-white/20 px-4 py-3 font-semibold text-slate-200">CANCELAR</button>
+                            <button type="button" data-testid="confirm-close-simulation" onClick={closeSimulation} disabled={!closeConfirmed || busy}
+                                className="rounded-xl bg-sky-600 px-4 py-3 font-bold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40">
+                                CONFIRMAR CIERRE
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {bulkMode && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4" role="presentation">

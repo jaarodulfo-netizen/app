@@ -2398,6 +2398,63 @@ async def simulate_emergency_release(request: Request, user=Depends(require_comm
     return {"ok": True, "incidentId": incident_id, "mode": "simulation", "results": results}
 
 
+# Administrative closure ONLY: this endpoint deliberately has no gateway calls.
+# A simulation never actuates physical access hardware and does not require
+# physical re-locking. A real emergency must remain open to onsite procedures.
+class EmergencySimulationClosure(BaseModel):
+    confirmation: str
+
+
+@api_router.post("/emergency/simulations/{incident_id}/close")
+async def close_emergency_simulation(
+    incident_id: str,
+    body: EmergencySimulationClosure,
+    request: Request,
+    user=Depends(require_commander),
+):
+    if not re.fullmatch(r"[0-9a-f]{32}", incident_id):
+        raise HTTPException(status_code=400, detail="Invalid incident ID")
+    if body.confirmation != "FINALIZAR":
+        raise HTTPException(status_code=400, detail="Confirmation FINALIZAR is required")
+
+    from pymongo import ReturnDocument
+
+    now = datetime.now(timezone.utc)
+    closed = await db.emergency_release_incidents.find_one_and_update(
+        {"incidentId": incident_id, "mode": "simulation", "state": "completed"},
+        {"$set": {
+            "state": "closed",
+            "closedAt": now,
+            "closedBy": user.get("email"),
+            "closureType": "administrative_simulation_only",
+            "closureNote": "No access-controller commands were sent by this operation.",
+        }},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not closed:
+        existing = await db.emergency_release_incidents.find_one(
+            {"incidentId": incident_id}, {"mode": 1, "state": 1}
+        )
+        if not existing:
+            raise HTTPException(status_code=404, detail="Simulation incident not found")
+        if existing.get("mode") != "simulation":
+            raise HTTPException(status_code=409, detail="Live emergency incidents cannot be closed via simulation controls")
+        raise HTTPException(status_code=409, detail="Simulation has already been closed or cannot be closed")
+
+    await db.emergency_release_audit.insert_one({
+        "type": "simulation_closed", "incidentId": incident_id,
+        "actor": user.get("email"), "at": now,
+        "sourceIp": request.client.host if request.client else None,
+        "hardwareCommandsSent": 0,
+    })
+    return {
+        "ok": True, "incidentId": incident_id,
+        "mode": "simulation", "state": "closed",
+        "closedAt": now, "hardwareCommandsSent": 0,
+        "physicalDoorsChanged": False,
+    }
+
+
 @api_router.post("/emergency/activate")
 async def activate_emergency_release(body: EmergencyReleaseConfirmation, request: Request, user=Depends(require_commander)):
     # Require both server-side arming and an explicit human confirmation per activation.
