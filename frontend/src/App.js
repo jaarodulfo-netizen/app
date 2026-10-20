@@ -20,6 +20,19 @@ import Officers from '@/pages/Officers';
 import Attendance from '@/pages/Attendance';
 import EmergencyRelease from '@/pages/EmergencyRelease';
 
+function CctvGuard({ children }) {
+    const { user } = useAuth();
+    if (user?.permissions?.cctv === false) {
+        return (
+            <div className="mx-auto mt-12 max-w-lg rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 text-center">
+                <h1 className="text-xl font-bold text-white">Acceso a CCTV restringido</h1>
+                <p className="mt-3 text-sm text-slate-300">Tu cuenta no tiene autorización para ver cámaras o grabadores. Solicita este permiso al Commander.</p>
+            </div>
+        );
+    }
+    return children;
+}
+
 function BootScreen() {
     return (
         <div className="min-h-screen bg-[#050811] flex flex-col items-center justify-center gap-4" data-testid="boot-screen">
@@ -51,7 +64,7 @@ function Console() {
             <SecurityProvider>
                 <div className="min-h-screen bg-black">
                     <Routes>
-                        <Route path="/feeds" element={<LiveFeeds />} />
+                        <Route path="/feeds" element={<CctvGuard><LiveFeeds /></CctvGuard>} />
                     </Routes>
                 </div>
             </SecurityProvider>
@@ -73,7 +86,7 @@ function Console() {
                         <Routes>
                             <Route path="/" element={<Dashboard />} />
                             <Route path="/map" element={<FloorMap />} />
-                            <Route path="/feeds" element={<LiveFeeds />} />
+                            <Route path="/feeds" element={<CctvGuard><LiveFeeds /></CctvGuard>} />
                             <Route path="/employees" element={<Employees />} />
                             <Route path="/devices" element={<Devices />} />
                             <Route path="/events" element={<Events />} />
