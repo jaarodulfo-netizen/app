@@ -19,7 +19,7 @@ export function Topbar() {
     const now = useNow(1000);
     const { user, logout } = useAuth();
     const initials = user?.name ? user.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() : '—';
-    const mobileItems = MOBILE_NAV.filter((n) => !n.commanderOnly || user?.role === 'commander');
+    const mobileItems = MOBILE_NAV.filter((n) => (!n.commanderOnly || user?.role === 'commander') && (n.to !== '/feeds' || user?.permissions?.cctv !== false));
 
     return (
         <header data-testid="topbar" className="sticky top-0 z-30 border-b border-sky-500/10 bg-[#050811]/85 backdrop-blur-xl">
