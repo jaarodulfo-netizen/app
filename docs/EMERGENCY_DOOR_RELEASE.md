@@ -11,6 +11,11 @@ It must never be treated as the primary emergency release mechanism.
   authenticated `commander` users; all new APIs enforce the role server-side.
 - A Commander chooses which physically mapped doors are in the emergency
   egress group. No door is selected by default.
+- **SELECT ALL** and **CLEAR ALL** are setup-only batch operations and are
+  available before the backend is armed. SELECT ALL includes every physically
+  mapped door, which must then be reviewed with EHS: a controller mapping
+  is **not** an approval of a fire exit. The group persists across logins
+  and reloads, so there is no per-door selection during an emergency.
 - `EJECUTAR SIMULACRO` writes a labeled audit incident and **never sends
   hardware commands**.
 - `LIBERAR PUERTAS` becomes actionable only when the server has
@@ -59,7 +64,8 @@ a simulated incident does not test any hardware.
 
 ## API surface
 - `GET /api/emergency/status` — authorized dashboard data and recent history.
-- `PUT /api/emergency/doors/{doorId}` — `{"eligible":true|false}`.
+- `PUT /api/emergency/doors/{doorId}` — `{"eligible":true|false}` (setup only).
+- `PUT /api/emergency/doors/bulk` — `{"mode":"select_all_mapped"|"clear_all","confirmation":"CONFIGURAR"}` (setup only; no hardware command).
 - `POST /api/emergency/simulate` — audit-only, no controller command.
 - `POST /api/emergency/activate` — `{"confirmation":"LIBERAR"}`, live
   only when armed server-side.
