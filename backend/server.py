@@ -2237,13 +2237,13 @@ async def live_camera_playlist(camera_id: str, quality: str = "sub", token: str 
     for line in lines:
         name = line.strip()
         if name and not name.startswith("#"):
-            if not re.fullmatch(r"seg-[0-9]{6}\\.ts", name):
+            if not re.fullmatch(r"seg-[0-9]{6}\.ts", name):
                 raise HTTPException(status_code=502, detail="Unexpected video segment in playlist")
             rewritten.append(f"segments/{name}?quality={quality}&token={token}")
         else:
             rewritten.append(line)
     return Response(
-        content="\\n".join(rewritten) + "\\n",
+        content="\n".join(rewritten) + "\n",
         media_type="application/vnd.apple.mpegurl",
         headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},
     )
@@ -2253,7 +2253,7 @@ async def live_camera_playlist(camera_id: str, quality: str = "sub", token: str 
 async def live_camera_segment(camera_id: str, file_name: str, quality: str = "sub", token: str = ""):
     await _authorized_hls_viewer(camera_id, token)
     quality = _valid_hls_quality(quality)
-    if not re.fullmatch(r"seg-[0-9]{6}\\.ts", file_name):
+    if not re.fullmatch(r"seg-[0-9]{6}\.ts", file_name):
         raise HTTPException(status_code=400, detail="Invalid segment name")
     raw = await _gateway_hls_file(camera_id, quality, file_name)
     return Response(content=raw, media_type="video/mp2t", headers={"Cache-Control": "no-store"})
