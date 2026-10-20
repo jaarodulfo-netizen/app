@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, Grid2X2, Grid3X3, GridIcon, Maximize2, MonitorUp, Search, Trash2, X, Loader2, CircleAlert } from 'lucide-react';
+import { ExternalLink, Grid2X2, Grid3X3, GridIcon, Maximize2, MonitorUp, Search, Trash2, X, Loader2, CircleAlert, PanelLeftClose, PanelLeftOpen, Expand } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
 import { api, formatApiError } from '../context/AuthContext';
@@ -35,49 +35,63 @@ function GatewaySnapshot({ cam }) {
     const [src, setSrc] = useState('');
     const [err, setErr] = useState('');
     const objectUrlRef = useRef('');
-    const timerRef = useRef(null);
-
-    const load = async () => {
-        try {
-            const { data } = await api.get(`/cameras/${cam.id}/snapshot`, { responseType: 'blob' });
-            const next = URL.createObjectURL(data);
-            if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
-            objectUrlRef.current = next;
-            setSrc(next);
-            setErr('');
-        } catch (e) {
-            setErr(formatApiError(e.response?.data?.detail) || 'Camera unavailable');
-        }
-    };
-
     useEffect(() => {
-        load();
-        timerRef.current = setInterval(load, 1400);
-        return () => {
-            clearInterval(timerRef.current);
-            if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+        let active = true;
+        let timer;
+        let pending;
+        const poll = async () => {
+            if (!active) return;
+            if (document.hidden) {
+                timer = setTimeout(poll, 2000);
+                return;
+            }
+            const controller = new AbortController();
+            pending = controller;
+            try {
+                const { data } = await api.get(`/cameras/${cam.id}/snapshot`, {
+                    responseType: 'blob', signal: controller.signal, timeout: 12000,
+                });
+                if (!active) return;
+                const url = URL.createObjectURL(data);
+                if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+                objectUrlRef.current = url;
+                setSrc(url);
+                setErr('');
+            } catch (e) {
+                if (active && !controller.signal.aborted) setErr(formatApiError(e.response?.data?.detail || e.message));
+            } finally {
+                pending = null;
+                if (active) timer = setTimeout(poll, 1400);
+            }
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+        poll();
+        return () => {
+            active = false;
+            clearTimeout(timer);
+            pending?.abort();
+            if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+            objectUrlRef.current = '';
+        };
     }, [cam.id]);
-
     return (
         <div className="absolute inset-0 bg-black">
             {src ? (
-                <img src={src} alt={cam.label} className="absolute inset-0 h-full w-full object-cover" />
+                <>
+                    <img src={src} alt={cam.label} className="absolute inset-0 h-full w-full object-contain" />
+                    <span className="pointer-events-none absolute left-2 top-2 rounded bg-black/55 px-2 py-1 text-[9px] text-amber-200">FOTOGRAMAS · NO VIDEO CONTINUO</span>
+                    {err && <span className="absolute bottom-11 left-2 rounded bg-red-950/70 px-2 py-1 text-[9px] text-red-200">CONEXIÓN INESTABLE</span>}
+                </>
             ) : (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black">
                     {err ? <CircleAlert size={21} className="text-red-400/70" /> : <Loader2 size={21} className="animate-spin text-sky-400/70" />}
-                    <span className={`mono text-[9px] tracking-[0.24em] ${err ? 'text-red-300' : 'text-sky-300'}`}>
-                        {err ? 'CAMERA UNAVAILABLE' : 'CONNECTING'}
-                    </span>
-                    {err && <span className="max-w-[85%] text-center mono text-[8px] text-slate-600">{err}</span>}
+                    <span className={`mono text-[9px] tracking-[0.24em] ${err ? 'text-red-300' : 'text-sky-300'}`}>{err ? 'CAMERA UNAVAILABLE' : 'CONNECTING'}</span>
                 </div>
             )}
         </div>
     );
 }
 
-function WallCell({ cam, index, selected, onSelect, onDropCamera, onRemove }) {
+function WallCell({ cam, index, selected, onSelect, onFocus, onDropCamera, onRemove }) {
     const onDrop = (e) => {
         e.preventDefault();
         const cameraId = e.dataTransfer.getData('application/x-kerma-camera') || e.dataTransfer.getData('text/plain');
@@ -87,6 +101,8 @@ function WallCell({ cam, index, selected, onSelect, onDropCamera, onRemove }) {
     return (
         <div
             onClick={() => onSelect(index)}
+            onDoubleClick={() => { if (cam) onFocus(index); }}
+            title={cam ? "Doble clic para ampliar o restaurar" : "Seleccionar ventana"}
             onDragOver={(e) => e.preventDefault()}
             onDrop={onDrop}
             className={`group relative min-h-0 min-w-0 overflow-hidden bg-black cursor-pointer ${selected ? 'ring-1 ring-inset ring-sky-400/80 z-10' : ''}`}
@@ -192,6 +208,9 @@ function VideoWall() {
     const { cameras } = useSecurity();
     const [wall, setWall] = useState(loadWall);
     const [activeSlot, setActiveSlot] = useState(0);
+    const [showCameraTree, setShowCameraTree] = useState(true);
+    const previousGridRef = useRef(null);
+    const wallContainerRef = useRef(null);
     const detached = new URLSearchParams(window.location.search).get('detached') === '1';
 
     useEffect(() => {
@@ -214,6 +233,7 @@ function VideoWall() {
     };
 
     const setLayout = (slots) => {
+        previousGridRef.current = null;
         const assignments = Array(slots).fill(null);
         wall.assignments.slice(0, slots).forEach((id, i) => { assignments[i] = id || null; });
         commit({ slots, assignments });
@@ -235,7 +255,26 @@ function VideoWall() {
         commit({ ...wall, assignments });
     };
 
-    const clear = () => commit({ ...wall, assignments: Array(wall.slots).fill(null) });
+    const clear = () => { previousGridRef.current = null; commit({ ...wall, assignments: Array(wall.slots).fill(null) }); };
+
+    const focus = (slot) => {
+        if (previousGridRef.current) {
+            const previous = previousGridRef.current;
+            previousGridRef.current = null;
+            commit(previous);
+            return;
+        }
+        const cameraId = wall.assignments[slot];
+        if (!cameraId) return;
+        previousGridRef.current = wall;
+        commit({ slots: 1, assignments: [cameraId] });
+        setActiveSlot(0);
+    };
+
+    const toggleFullscreen = () => {
+        if (document.fullscreenElement) document.exitFullscreen?.();
+        else wallContainerRef.current?.requestFullscreen?.().catch(() => {});
+    };
 
     const detach = () => {
         const url = `${window.location.origin}${window.location.pathname}?detached=1`;
@@ -260,6 +299,7 @@ function VideoWall() {
                         cam={cam}
                         selected={activeSlot === index}
                         onSelect={setActiveSlot}
+                        onFocus={focus}
                         onDropCamera={assign}
                         onRemove={remove}
                     />
@@ -304,7 +344,16 @@ function VideoWall() {
                     })}
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" data-testid="cctv-tree-toggle" onClick={() => setShowCameraTree(v => !v)}
+                        className="flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-[10px] text-sky-200">
+                        {showCameraTree ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}
+                        {showCameraTree ? 'OCULTAR ÁRBOL' : 'CÁMARAS'}
+                    </button>
+                    <button type="button" data-testid="cctv-fullscreen" onClick={toggleFullscreen}
+                        className="flex items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-[10px] text-sky-200">
+                        <Expand size={15} /> FULLSCREEN
+                    </button>
                     <button onClick={clear} className="flex items-center gap-2 rounded-md px-3 py-2 mono text-[9px] tracking-wider text-slate-500 hover:bg-red-500/10 hover:text-red-300">
                         <Trash2 size={12} /> CLEAR
                     </button>
@@ -314,13 +363,13 @@ function VideoWall() {
                 </div>
             </div>
 
-            <div className="flex h-[72vh] min-h-[560px] overflow-hidden rounded-lg border border-white/10 bg-black">
-                <CameraRail
+            <div ref={wallContainerRef} className="flex h-[72vh] min-h-[560px] overflow-hidden rounded-lg border border-white/10 bg-black">
+                {showCameraTree && <CameraRail
                     cameras={cameras || []}
                     assignedIds={assignedIds}
                     activeSlot={activeSlot}
                     onAssign={assign}
-                />
+                />}
                 {wallGrid}
             </div>
         </div>
