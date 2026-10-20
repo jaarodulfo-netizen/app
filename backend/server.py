@@ -2552,6 +2552,37 @@ def validate_emergency_targets(doors: list) -> None:
         seen.add(physical)
 
 
+# Read-only hardware probe. No relay, card, or access state is altered.
+@api_router.get("/emergency/facial-diagnostics/{gateway_device_id}")
+async def facial_emergency_diagnostics(gateway_device_id: str, user=Depends(require_commander)):
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", gateway_device_id):
+        raise HTTPException(status_code=400, detail="Invalid facial device ID")
+    device = await db.devices.find_one({"gatewayDeviceId": gateway_device_id, "type": "face"})
+    if not device:
+        raise HTTPException(status_code=404, detail="Facial terminal not found")
+    if "kerma-monterrey" not in gateway_connections:
+        raise HTTPException(status_code=503, detail="Windows Gateway is offline")
+    outputs = {}
+    for name, command in (
+        ("deviceInfo", {"kind": "device.info", "deviceId": gateway_device_id}),
+        ("capabilities", {"kind": "device.capabilities", "deviceId": gateway_device_id}),
+        ("doorStatus", {"kind": "door.status", "deviceId": gateway_device_id}),
+    ):
+        try:
+            result = await send_gateway_command(command)
+            outputs[name] = result
+        except Exception as exc:
+            outputs[name] = {"readError": str(exc)[:180]}
+    return {
+        "deviceId": gateway_device_id,
+        "name": device.get("name"),
+        "readOnly": True, "hardwareCommandsSent": 0,
+        "results": outputs,
+        "conclusion": "Capability response does not prove sustained relay release. "
+                      "Do not actuate a facial emergency output until model, firmware and local release mechanism are verified.",
+    }
+
+
 @api_router.get("/emergency/status")
 async def emergency_status(user=Depends(require_commander)):
     doors = await db.doors.find({}, {
