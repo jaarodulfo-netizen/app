@@ -1778,6 +1778,84 @@ async def delete_access_level(item_id: str, user=Depends(get_current_user)):
     return {"ok": True}
 
 
+# Commander-only read-only roster reconciliation.
+# Historic iVMS data is merely a comparison reference, NOT a source of truth
+# and not a live readback from Hikvision devices. Never creates/updates staff.
+@api_router.get("/employees/comparison")
+async def compare_historic_ivms_roster(user=Depends(require_commander)):
+    reference_file = ROOT_DIR / "legacy_ivms_roster_reference.json"
+    if not reference_file.is_file():
+        raise HTTPException(status_code=503, detail="Historical iVMS comparison reference is unavailable")
+    reference = json.loads(reference_file.read_text(encoding="utf-8"))
+    historical = reference.get("employees") or []
+    current = await db.employees.find(
+        {}, {"name": 1, "personId": 1, "cardNo": 1, "cardNos": 1, "source": 1}
+    ).to_list(2000)
+    current_by_id = {}
+    for person in current:
+        key = str(person.get("personId") or "").strip()
+        if key:
+            current_by_id.setdefault(key, []).append(person)
+
+    matched_object_ids = set()
+    rows = []
+    for item in historical:
+        person_id = str(item.get("personId") or "").strip()
+        hits = current_by_id.get(person_id, [])
+        old_cards = sorted(str(x).strip() for x in (item.get("cardNos") or []) if str(x).strip())
+        if not hits:
+            rows.append({
+                "personId": person_id, "historicalName": item.get("name"),
+                "currentName": None, "historicalCards": old_cards,
+                "currentCards": [], "status": "not_in_v2",
+                "description": "Not present in the current approved V2 roster; no automatic re-enrollment.",
+            })
+            continue
+        person = hits[0]
+        matched_object_ids.add(person["_id"])
+        current_cards = person.get("cardNos") or ([person.get("cardNo")] if person.get("cardNo") else [])
+        current_cards = sorted(str(x).strip() for x in current_cards if str(x).strip())
+        same_name = str(item.get("name") or "").strip().casefold() == str(person.get("name") or "").strip().casefold()
+        same_cards = old_cards == current_cards
+        status = "duplicate_in_v2" if len(hits) > 1 else "match" if same_name and same_cards else "different"
+        for extra in hits[1:]:
+            matched_object_ids.add(extra["_id"])
+        rows.append({
+            "personId": person_id, "historicalName": item.get("name"),
+            "currentName": person.get("name"), "historicalCards": old_cards,
+            "currentCards": current_cards, "status": status,
+            "description": "Duplicate Person ID in V2" if len(hits) > 1 else None,
+        })
+
+    for person in current:
+        if person["_id"] in matched_object_ids:
+            continue
+        current_cards = person.get("cardNos") or ([person.get("cardNo")] if person.get("cardNo") else [])
+        rows.append({
+            "personId": str(person.get("personId") or ""),
+            "historicalName": None, "currentName": person.get("name"),
+            "historicalCards": [], "currentCards": [str(x) for x in current_cards if x],
+            "status": "v2_only",
+            "description": "Exists in V2 but not in this historical reference.",
+        })
+
+    counts = {
+        "match": sum(x["status"] == "match" for x in rows),
+        "different": sum(x["status"] == "different" for x in rows),
+        "not_in_v2": sum(x["status"] == "not_in_v2" for x in rows),
+        "v2_only": sum(x["status"] == "v2_only" for x in rows),
+        "duplicate_in_v2": sum(x["status"] == "duplicate_in_v2" for x in rows),
+    }
+    return {
+        "source": "Historical iVMS-4200 import snapshot",
+        "sourceIsLive": False, "readOnly": True, "automaticReenrollment": False,
+        "comparisonAt": datetime.now(timezone.utc),
+        "historicalCount": len(historical), "currentCount": len(current),
+        "counts": counts, "rows": rows,
+        "disclaimer": "A missing row does not prove who deleted it or whether credentials remain installed on physical devices.",
+    }
+
+
 @api_router.get("/employees")
 async def list_employees(user=Depends(get_current_user)):
     docs = await db.employees.find().sort("created_at", -1).to_list(500)
