@@ -2288,6 +2288,72 @@ async def emergency_status(user=Depends(require_commander)):
     }
 
 
+class EmergencyBulkSelection(BaseModel):
+    mode: str
+    confirmation: str
+
+
+@api_router.put("/emergency/doors/bulk")
+async def bulk_configure_emergency_doors(body: EmergencyBulkSelection, user=Depends(require_commander)):
+    # Configuration occurs ahead of an incident, NEVER while the system is armed.
+    # This endpoint does not communicate with access controllers.
+    if emergency_release_armed():
+        raise HTTPException(status_code=423, detail="Disable live release before changing the evacuation group")
+    if body.confirmation != "CONFIGURAR" or body.mode not in {"select_all_mapped", "clear_all"}:
+        raise HTTPException(status_code=400, detail="Invalid bulk action or missing CONFIGURAR confirmation")
+
+    count = await db.doors.count_documents({})
+    if count > 200:
+        raise HTTPException(status_code=409, detail="More than 200 doors: review inventory before bulk configuration")
+    docs = await db.doors.find({}, {
+        "gatewayDeviceId": 1, "doorNo": 1, "emergencyEgress": 1,
+    }).to_list(200)
+    now = datetime.now(timezone.utc)
+    if body.mode == "select_all_mapped":
+        # ONLY physically mapped entries. Do not send commands, and do not
+        # interpret controller linkage as fire-safety certification.
+        selected = [
+            d for d in docs
+            if isinstance(d.get("gatewayDeviceId"), str)
+            and d["gatewayDeviceId"].strip()
+            and isinstance(d.get("doorNo"), int)
+            and not isinstance(d.get("doorNo"), bool)
+            and d["doorNo"] >= 1
+        ]
+        validate_emergency_targets(selected)
+        selected_ids = [d["_id"] for d in selected]
+        # Remove obsolete/unmapped selections, then store the reviewed group.
+        await db.doors.update_many(
+            {"_id": {"$nin": selected_ids}, "emergencyEgress": True},
+            {"$set": {"emergencyEgress": False, "emergencyEgressUpdatedAt": now,
+                      "emergencyEgressUpdatedBy": user.get("email")}},
+        )
+        await db.doors.update_many(
+            {"_id": {"$in": selected_ids}},
+            {"$set": {"emergencyEgress": True, "emergencyEgressUpdatedAt": now,
+                      "emergencyEgressUpdatedBy": user.get("email")}},
+        )
+    else:
+        selected = []
+        await db.doors.update_many(
+            {"emergencyEgress": True},
+            {"$set": {"emergencyEgress": False, "emergencyEgressUpdatedAt": now,
+                      "emergencyEgressUpdatedBy": user.get("email")}},
+        )
+
+    await db.emergency_release_audit.insert_one({
+        "type": "bulk_configuration", "mode": body.mode,
+        "selectedCount": len(selected), "inventoryCount": count,
+        "actor": user.get("email"), "at": now,
+        "requiresSiteApproval": True,
+    })
+    return {
+        "ok": True, "mode": body.mode, "selectedCount": len(selected),
+        "inventoryCount": count, "hardwareCommandsSent": 0,
+        "message": "Preconfigured only. Site approval is required before enabling live release.",
+    }
+
+
 @api_router.put("/emergency/doors/{item_id}")
 async def configure_emergency_door(item_id: str, body: EmergencyDoorSelection, user=Depends(require_commander)):
     try:
