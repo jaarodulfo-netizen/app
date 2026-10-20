@@ -1132,6 +1132,73 @@ async def attendance_report(start: str, end: str, user=Depends(get_current_user)
 gateway_connections: dict[str, WebSocket] = {}
 gateway_pending: dict[str, asyncio.Future] = {}
 
+# Independent media WebSocket: never queue large HLS video in the door/control
+# command channel. The gateway authenticates using the same shared secret
+# but registers over its own connection.
+gateway_video_connections: dict[str, WebSocket] = {}
+gateway_video_pending: dict[str, asyncio.Future] = {}
+
+
+async def send_video_gateway_command(command: dict, gateway_id: str = "kerma-monterrey"):
+    if command.get("kind") not in {"nvr.hls.start", "nvr.hls.fetch"}:
+        raise HTTPException(status_code=403, detail="Physical access commands are forbidden on the video tunnel")
+    ws = gateway_video_connections.get(gateway_id)
+    if not ws:
+        raise HTTPException(status_code=503, detail="Dedicated HD video tunnel is offline; update Windows Gateway")
+    request_id = uuid.uuid4().hex
+    future = asyncio.get_running_loop().create_future()
+    gateway_video_pending[request_id] = future
+    try:
+        await ws.send_json({"type": "command", "requestId": request_id, "command": command})
+        return await asyncio.wait_for(future, timeout=18)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Windows HD video tunnel timed out")
+    finally:
+        gateway_video_pending.pop(request_id, None)
+
+
+@app.websocket("/gateway-video")
+async def dedicated_video_tunnel(websocket: WebSocket):
+    auth = websocket.headers.get("authorization", "")
+    expected = os.environ.get("GATEWAY_TOKEN", "")
+    supplied = auth[7:] if auth.startswith("Bearer ") else ""
+    if not expected or not supplied or not hmac.compare_digest(supplied.encode(), expected.encode()):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    gateway_id = None
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            if msg.get("type") == "register":
+                if msg.get("channel") != "video-hls-v1":
+                    await websocket.close(code=1008)
+                    return
+                gateway_id = str(msg.get("gatewayId") or "")
+                if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", gateway_id):
+                    await websocket.close(code=1008)
+                    return
+                gateway_video_connections[gateway_id] = websocket
+                await websocket.send_json({"type": "registered", "gatewayId": gateway_id})
+                continue
+            if msg.get("type") == "result" and gateway_id:
+                future = gateway_video_pending.get(str(msg.get("requestId") or ""))
+                if future and not future.done():
+                    if msg.get("ok"):
+                        future.set_result(msg.get("data"))
+                    else:
+                        future.set_exception(RuntimeError(str(msg.get("error") or "Windows video error")[:180]))
+    except WebSocketDisconnect:
+        pass
+    except Exception as error:
+        logger.warning("Video tunnel closed: %s", type(error).__name__)
+    finally:
+        if gateway_id and gateway_video_connections.get(gateway_id) is websocket:
+            gateway_video_connections.pop(gateway_id, None)
+
+
+
+
 
 async def gateway_event_doc(event: dict) -> dict:
     when = parse_time(event.get("time"))
@@ -2134,6 +2201,131 @@ async def create_camera(body: CameraIn, user=Depends(require_cctv)):
     return doc_id(doc)
 
 
+# HD continuous HLS through the existing authenticated outgoing Gateway tunnel.
+# Private NVR RTSP credentials remain on the Windows Gateway. The web backend
+# never connects to a 192.168.x.x camera or stores video recordings.
+class LiveQuality(BaseModel):
+    quality: str = "sub"
+
+
+async def _camera_hls_target(camera_id: str) -> dict:
+    if not ObjectId.is_valid(camera_id):
+        raise HTTPException(status_code=400, detail="Invalid camera ID")
+    camera = await db.cameras.find_one({"_id": ObjectId(camera_id)})
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not camera.get("nvr") or not camera.get("nvrIp") or not camera.get("channelNo"):
+        raise HTTPException(status_code=409, detail="Camera is not linked to an NVR channel")
+    try:
+        nvr_id = ObjectId(str(camera["nvr"]))
+    except Exception:
+        raise HTTPException(status_code=409, detail="Invalid linked NVR reference")
+    nvr = await db.devices.find_one({"_id": nvr_id, "type": "nvr"})
+    if not nvr or nvr.get("ip") != camera.get("nvrIp"):
+        raise HTTPException(status_code=409, detail="NVR inventory mismatch; resync channels")
+    ch = int(camera["channelNo"])
+    if ch < 1 or ch > 256:
+        raise HTTPException(status_code=400, detail="Invalid NVR channel")
+    return {"nvrId": str(nvr["_id"]), "nvrIp": nvr["ip"], "channelNo": ch}
+
+
+async def _authorized_hls_viewer(camera_id: str, token: str) -> None:
+    user_id = check_stream_token(camera_id, token) if token else None
+    if not user_id:
+        raise HTTPException(status_code=403, detail="Invalid or expired video token")
+    viewer = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not viewer or not viewer.get("is_active", True) or not effective_permissions(viewer)["cctv"]:
+        raise HTTPException(status_code=403, detail="CCTV permission revoked")
+
+
+def _valid_hls_quality(value: str) -> str:
+    if value not in {"sub", "main"}:
+        raise HTTPException(status_code=400, detail="Quality must be sub or main")
+    return value
+
+
+async def _gateway_hls_file(camera_id: str, quality: str, file: str) -> bytes:
+    target = await _camera_hls_target(camera_id)
+    try:
+        result = await send_video_gateway_command({
+            "kind": "nvr.hls.fetch",
+            "nvrId": target["nvrId"],
+            "channelNo": target["channelNo"],
+            "quality": quality,
+            "file": file,
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Gateway HLS unavailable or segment expired") from exc
+    if not isinstance(result, dict) or result.get("file") != file or not isinstance(result.get("base64"), str):
+        raise HTTPException(status_code=502, detail="Invalid HLS Gateway response")
+    encoded = result["base64"]
+    if len(encoded) > 6_100_000:
+        raise HTTPException(status_code=502, detail="Gateway video segment too large")
+    try:
+        blob = base64.b64decode(encoded, validate=True)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Gateway video segment corrupt")
+    if not blob:
+        raise HTTPException(status_code=502, detail="Empty Gateway video response")
+    return blob
+
+
+@api_router.post("/cameras/{camera_id}/live/start")
+async def start_live_camera(camera_id: str, body: LiveQuality, user=Depends(require_cctv)):
+    quality = _valid_hls_quality(body.quality)
+    target = await _camera_hls_target(camera_id)
+    result = await send_video_gateway_command({
+        "kind": "nvr.hls.start",
+        "nvr": {"id": target["nvrId"], "ip": target["nvrIp"]},
+        "channelNo": target["channelNo"],
+        "quality": quality,
+    })
+    if not isinstance(result, dict) or result.get("ready") is not True:
+        raise HTTPException(status_code=503, detail="Windows Gateway video encoder not ready")
+    expiry = int(datetime.now(timezone.utc).timestamp() + 3600)
+    token = make_stream_token(camera_id, expiry, str(user["_id"]))
+    return {
+        "ok": True, "quality": quality, "transport": "hls",
+        "resolutionProfile": "up-to-1080p" if quality == "main" else "up-to-540p",
+        "playlistUrl": f"/api/cameras/{camera_id}/live/playlist.m3u8?quality={quality}&token={token}",
+        "warning": "Stream is live; quality and latency depend on NVR, FFmpeg and uplink",
+    }
+
+
+@api_router.get("/cameras/{camera_id}/live/playlist.m3u8")
+async def live_camera_playlist(camera_id: str, quality: str = "sub", token: str = ""):
+    await _authorized_hls_viewer(camera_id, token)
+    quality = _valid_hls_quality(quality)
+    raw = await _gateway_hls_file(camera_id, quality, "index.m3u8")
+    if len(raw) > 150_000 or not raw.startswith(b"#EXTM3U"):
+        raise HTTPException(status_code=502, detail="Malformed HLS playlist")
+    lines = raw.decode("utf-8", errors="strict").splitlines()
+    rewritten = []
+    for line in lines:
+        name = line.strip()
+        if name and not name.startswith("#"):
+            if not re.fullmatch(r"seg-[0-9]{6}\.ts", name):
+                raise HTTPException(status_code=502, detail="Unexpected video segment in playlist")
+            rewritten.append(f"segments/{name}?quality={quality}&token={token}")
+        else:
+            rewritten.append(line)
+    return Response(
+        content="\n".join(rewritten) + "\n",
+        media_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@api_router.get("/cameras/{camera_id}/live/segments/{file_name}")
+async def live_camera_segment(camera_id: str, file_name: str, quality: str = "sub", token: str = ""):
+    await _authorized_hls_viewer(camera_id, token)
+    quality = _valid_hls_quality(quality)
+    if not re.fullmatch(r"seg-[0-9]{6}\.ts", file_name):
+        raise HTTPException(status_code=400, detail="Invalid segment name")
+    raw = await _gateway_hls_file(camera_id, quality, file_name)
+    return Response(content=raw, media_type="video/mp2t", headers={"Cache-Control": "no-store"})
+
+
 @api_router.get("/cameras/{camera_id}/snapshot")
 async def camera_snapshot(camera_id: str, user=Depends(require_cctv)):
     try:
@@ -2427,6 +2619,37 @@ def validate_emergency_targets(doors: list) -> None:
         seen.add(physical)
 
 
+# Read-only hardware probe. No relay, card, or access state is altered.
+@api_router.get("/emergency/facial-diagnostics/{gateway_device_id}")
+async def facial_emergency_diagnostics(gateway_device_id: str, user=Depends(require_commander)):
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", gateway_device_id):
+        raise HTTPException(status_code=400, detail="Invalid facial device ID")
+    device = await db.devices.find_one({"gatewayDeviceId": gateway_device_id, "type": "face"})
+    if not device:
+        raise HTTPException(status_code=404, detail="Facial terminal not found")
+    if "kerma-monterrey" not in gateway_connections:
+        raise HTTPException(status_code=503, detail="Windows Gateway is offline")
+    outputs = {}
+    for name, command in (
+        ("deviceInfo", {"kind": "device.info", "deviceId": gateway_device_id}),
+        ("capabilities", {"kind": "device.capabilities", "deviceId": gateway_device_id}),
+        ("doorStatus", {"kind": "door.status", "deviceId": gateway_device_id}),
+    ):
+        try:
+            result = await send_gateway_command(command)
+            outputs[name] = result
+        except Exception as exc:
+            outputs[name] = {"readError": str(exc)[:180]}
+    return {
+        "deviceId": gateway_device_id,
+        "name": device.get("name"),
+        "readOnly": True, "hardwareCommandsSent": 0,
+        "results": outputs,
+        "conclusion": "Capability response does not prove sustained relay release. "
+                      "Do not actuate a facial emergency output until model, firmware and local release mechanism are verified.",
+    }
+
+
 @api_router.get("/emergency/status")
 async def emergency_status(user=Depends(require_commander)):
     doors = await db.doors.find({}, {
@@ -2441,6 +2664,11 @@ async def emergency_status(user=Depends(require_commander)):
         "singleDoorTestEnabled": single_door_test_enabled() and not emergency_release_armed(),
         "singleDoorTest": single_test_public(await db.emergency_single_test_state.find_one({"_id": "kerma-single-door"})),
         "gatewayOnline": "kerma-monterrey" in gateway_connections,
+        "facialDevices": [
+            {"id": d["gatewayDeviceId"], "name": d.get("name") or d["gatewayDeviceId"]}
+            async for d in db.devices.find({"type": "face"}, {"gatewayDeviceId": 1, "name": 1})
+            if d.get("gatewayDeviceId")
+        ],
         "doors": [emergency_door_info(d) for d in doors],
         "recent": recent,
         "warning": "Gateway acknowledgement is not physical door verification. Local independent fire-egress release is required.",
