@@ -4,7 +4,7 @@ import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlu
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
-import { api, fileUrl, formatApiError } from '../context/AuthContext';
+import { api, fileUrl, formatApiError, useAuth } from '../context/AuthContext';
 
 function Avatar({ emp, size = 'h-14 w-14' }) {
     if (emp.photoPath) {
@@ -747,6 +747,124 @@ function EditEmployeeModal({ employee, onClose }) {
     );
 }
 
+
+const COMPARISON_STATUS = {
+    match: { label: 'COINCIDE', className: 'text-emerald-300' },
+    different: { label: 'DATOS DIFERENTES', className: 'text-amber-300' },
+    not_in_v2: { label: 'NO ESTÁ EN V2', className: 'text-rose-300' },
+    v2_only: { label: 'SOLO EN V2', className: 'text-sky-300' },
+    duplicate_in_v2: { label: 'ID DUPLICADO EN V2', className: 'text-rose-300' },
+};
+
+function HistoricIvmsComparison() {
+    const { user } = useAuth();
+    const [open, setOpen] = useState(false);
+    const [loading, setLoading] = useState(false);
+    const [data, setData] = useState(null);
+    const [filter, setFilter] = useState('all');
+    const [error, setError] = useState('');
+
+    if (user?.role !== 'commander') return null;
+
+    const load = async () => {
+        setLoading(true);
+        setError('');
+        try {
+            const response = await api.get('/employees/comparison');
+            setData(response.data);
+        } catch (err) {
+            setError(formatApiError(err?.response?.data?.detail || err?.message));
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const rows = (data?.rows || []).filter((row) => filter === 'all' || row.status === filter);
+    return (
+        <section className="aegis-panel rounded-xl border border-sky-500/20 p-4 sm:p-5" data-testid="personnel-comparison">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <h2 className="text-base font-semibold text-white">Comparativo de personal · iVMS histórico vs Kerma V2</h2>
+                    <p className="mt-1 text-xs text-slate-400">
+                        Kerma V2 es la lista autorizada. La referencia histórica es de solo lectura; no volverá a importar ni modificar usuarios borrados.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    data-testid="personnel-comparison-toggle"
+                    onClick={() => {
+                        if (!open && !data) load();
+                        setOpen((prev) => !prev);
+                    }}
+                    className="rounded-xl border border-sky-400/40 bg-sky-500/10 px-4 py-2.5 text-xs font-bold text-sky-200 hover:bg-sky-500/20"
+                >
+                    {open ? 'OCULTAR COMPARATIVO' : 'VER COMPARATIVO'}
+                </button>
+            </div>
+            {open && (
+                <div className="mt-5 space-y-4">
+                    <p className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 text-xs text-amber-200">
+                        Esta lista iVMS es una copia histórica, NO una lectura en vivo de los controladores Hikvision. “No está en V2” no identifica por sí solo quién lo eliminó. La aplicación no dará de alta a nadie desde aquí ni comprobará revocación física de tarjetas.
+                    </p>
+                    {error && <p role="alert" className="text-sm text-rose-300">{error}</p>}
+                    <div className="flex flex-wrap items-center gap-3">
+                        <button type="button" onClick={load} disabled={loading} data-testid="personnel-comparison-refresh"
+                            className="flex items-center gap-2 rounded-lg border border-white/15 px-3 py-2 text-xs font-semibold text-slate-200 disabled:opacity-40">
+                            <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>
+                            {loading ? 'COMPARANDO…' : 'ACTUALIZAR COMPARATIVO'}
+                        </button>
+                        {data && <span className="mono text-xs text-slate-400">Base histórica: {data.historicalCount} · Base V2: {data.currentCount}</span>}
+                    </div>
+                    {data && (
+                        <>
+                            <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
+                                {Object.entries(COMPARISON_STATUS).map(([key, meta]) => (
+                                    <button key={key} type="button" onClick={() => setFilter(filter === key ? 'all' : key)}
+                                        className={`rounded-lg border p-3 text-left text-xs ${filter === key ? 'border-sky-400/60 bg-sky-500/10' : 'border-white/10 bg-white/[0.02]'}`}>
+                                        <span className={`block font-bold ${meta.className}`}>{meta.label}</span>
+                                        <span className="mt-2 block font-mono text-xl text-white">{data.counts?.[key] ?? 0}</span>
+                                    </button>
+                                ))}
+                            </div>
+                            <label className="flex items-center gap-2 text-xs text-slate-300">
+                                Mostrar
+                                <select className="rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-slate-200"
+                                    value={filter} onChange={(e) => setFilter(e.target.value)}>
+                                    <option value="all">Todos</option>
+                                    {Object.entries(COMPARISON_STATUS).map(([key, meta]) => <option key={key} value={key}>{meta.label}</option>)}
+                                </select>
+                                <span className="text-slate-500">{rows.length} registros</span>
+                            </label>
+                            <div className="max-h-[500px] overflow-auto rounded-lg border border-white/10">
+                                <table className="w-full min-w-[720px] text-left text-xs">
+                                    <thead className="sticky top-0 bg-[#131e32] text-slate-300">
+                                        <tr><th className="p-3">Person ID</th><th className="p-3">En lista histórica</th><th className="p-3">En Kerma V2</th><th className="p-3">Estado</th></tr>
+                                    </thead>
+                                    <tbody>
+                                        {rows.map((row, i) => {
+                                            const meta = COMPARISON_STATUS[row.status] || {};
+                                            return (
+                                                <tr key={`${row.personId}-${i}`} className="border-t border-white/5 text-slate-200">
+                                                    <td className="p-3 font-mono">{row.personId || '—'}</td>
+                                                    <td className="p-3">{row.historicalName || '—'}<div className="mt-1 font-mono text-[10px] text-slate-500">{row.historicalCards?.join(', ') || ''}</div></td>
+                                                    <td className="p-3">{row.currentName || '—'}<div className="mt-1 font-mono text-[10px] text-slate-500">{row.currentCards?.join(', ') || ''}</div></td>
+                                                    <td className={`p-3 font-bold ${meta.className || 'text-slate-400'}`}>{meta.label || row.status}</td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                                {rows.length === 0 && <p className="p-4 text-sm text-slate-400">Sin coincidencias para este filtro.</p>}
+                            </div>
+                            <p className="text-xs text-slate-500">Consulta de solo lectura: no crea, elimina ni sincroniza empleados o accesos físicos.</p>
+                        </>
+                    )}
+                </div>
+            )}
+        </section>
+    );
+}
+
 export default function Employees() {
     const { employees, devices, deleteEmployee, refreshEmployees } = useSecurity();
     const [open, setOpen] = useState(false);
@@ -830,6 +948,8 @@ export default function Employees() {
                     </button>
                 </div>
             </PageHeader>
+
+            <HistoricIvmsComparison />
 
             <div className="aegis-panel rounded-xl p-4 sm:p-5">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
