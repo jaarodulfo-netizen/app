@@ -1132,6 +1132,73 @@ async def attendance_report(start: str, end: str, user=Depends(get_current_user)
 gateway_connections: dict[str, WebSocket] = {}
 gateway_pending: dict[str, asyncio.Future] = {}
 
+# Independent media WebSocket: never queue large HLS video in the door/control
+# command channel. The gateway authenticates using the same shared secret
+# but registers over its own connection.
+gateway_video_connections: dict[str, WebSocket] = {}
+gateway_video_pending: dict[str, asyncio.Future] = {}
+
+
+async def send_video_gateway_command(command: dict, gateway_id: str = "kerma-monterrey"):
+    if command.get("kind") not in {"nvr.hls.start", "nvr.hls.fetch"}:
+        raise HTTPException(status_code=403, detail="Physical access commands are forbidden on the video tunnel")
+    ws = gateway_video_connections.get(gateway_id)
+    if not ws:
+        raise HTTPException(status_code=503, detail="Dedicated HD video tunnel is offline; update Windows Gateway")
+    request_id = uuid.uuid4().hex
+    future = asyncio.get_running_loop().create_future()
+    gateway_video_pending[request_id] = future
+    try:
+        await ws.send_json({"type": "command", "requestId": request_id, "command": command})
+        return await asyncio.wait_for(future, timeout=18)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Windows HD video tunnel timed out")
+    finally:
+        gateway_video_pending.pop(request_id, None)
+
+
+@app.websocket("/gateway-video")
+async def dedicated_video_tunnel(websocket: WebSocket):
+    auth = websocket.headers.get("authorization", "")
+    expected = os.environ.get("GATEWAY_TOKEN", "")
+    supplied = auth[7:] if auth.startswith("Bearer ") else ""
+    if not expected or not supplied or not hmac.compare_digest(supplied.encode(), expected.encode()):
+        await websocket.close(code=1008)
+        return
+    await websocket.accept()
+    gateway_id = None
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            if msg.get("type") == "register":
+                if msg.get("channel") != "video-hls-v1":
+                    await websocket.close(code=1008)
+                    return
+                gateway_id = str(msg.get("gatewayId") or "")
+                if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", gateway_id):
+                    await websocket.close(code=1008)
+                    return
+                gateway_video_connections[gateway_id] = websocket
+                await websocket.send_json({"type": "registered", "gatewayId": gateway_id})
+                continue
+            if msg.get("type") == "result" and gateway_id:
+                future = gateway_video_pending.get(str(msg.get("requestId") or ""))
+                if future and not future.done():
+                    if msg.get("ok"):
+                        future.set_result(msg.get("data"))
+                    else:
+                        future.set_exception(RuntimeError(str(msg.get("error") or "Windows video error")[:180]))
+    except WebSocketDisconnect:
+        pass
+    except Exception as error:
+        logger.warning("Video tunnel closed: %s", type(error).__name__)
+    finally:
+        if gateway_id and gateway_video_connections.get(gateway_id) is websocket:
+            gateway_video_connections.pop(gateway_id, None)
+
+
+
+
 
 async def gateway_event_doc(event: dict) -> dict:
     when = parse_time(event.get("time"))
@@ -2180,7 +2247,7 @@ def _valid_hls_quality(value: str) -> str:
 async def _gateway_hls_file(camera_id: str, quality: str, file: str) -> bytes:
     target = await _camera_hls_target(camera_id)
     try:
-        result = await send_gateway_command({
+        result = await send_video_gateway_command({
             "kind": "nvr.hls.fetch",
             "nvrId": target["nvrId"],
             "channelNo": target["channelNo"],
@@ -2207,7 +2274,7 @@ async def _gateway_hls_file(camera_id: str, quality: str, file: str) -> bytes:
 async def start_live_camera(camera_id: str, body: LiveQuality, user=Depends(require_cctv)):
     quality = _valid_hls_quality(body.quality)
     target = await _camera_hls_target(camera_id)
-    result = await send_gateway_command({
+    result = await send_video_gateway_command({
         "kind": "nvr.hls.start",
         "nvr": {"id": target["nvrId"], "ip": target["nvrIp"]},
         "channelNo": target["channelNo"],
@@ -2245,7 +2312,7 @@ async def live_camera_playlist(camera_id: str, quality: str = "sub", token: str 
     return Response(
         content="\n".join(rewritten) + "\n",
         media_type="application/vnd.apple.mpegurl",
-        headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},
+        headers={"Cache-Control": "no-store"},
     )
 
 
