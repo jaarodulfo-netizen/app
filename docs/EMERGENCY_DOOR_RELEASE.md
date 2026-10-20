@@ -38,6 +38,44 @@ It must never be treated as the primary emergency release mechanism.
   await independently verified evacuation completion and onsite sign-off.
   A live incident cannot be closed with the simulation endpoint.
 
+## Supervised one-door commissioning (separate from bulk release)
+
+An authorized Commander can use the **Prueba física de UNA puerta** panel
+to verify **one preselected, physically mapped exit at a time**.
+
+- The backend variable `EMERGENCY_SINGLE_DOOR_TEST_ENABLED=true` exposes
+  the individual commissioning controls without enabling bulk release.
+  The *separate* backend variable `EMERGENCY_RELEASE_ENABLED` must remain
+  `false` until onsite fire/life-safety commissioning of all approved exits.
+- Choose exactly one door from the current emergency group. No door is
+  selected automatically. The backend verifies the selected door's Mongo ID,
+  emergency-group membership, physical mapping, Commander role, Gateway
+  connectivity, and explicit onsite supervision and local restoration
+  readiness checklist.
+- `POST /api/emergency/test-door/start` sends exactly one `alwaysOpen`
+  request to that door. A MongoDB single-test interlock prevents a second
+  test from starting while the first is still active or uncertain.
+- The test result must be verified physically; Gateway ACK is **not** proof
+  that the relay/circuit/lock actually released.
+- After checking the physical site is clear and Security/EHS authorizes,
+  `POST /api/emergency/test-door/restore` sends one `close` request to
+  the **same** door captured in the start record. It never automatically
+  relocks and never dispatches a command to the other doors.
+- Only after checking physical restoration and unobstructed safe egress,
+  `POST /api/emergency/test-door/finish` records the physical verification
+  and closes the commissioning test; this action sends **zero** commands.
+- Command timeouts or unknown results are left explicitly **uncertain**.
+  They still require onsite observation; the interlock stays active.
+  Do not repeat `alwaysOpen` blindly.
+- Never test during a real evacuation. Do not use remote commands as a
+  substitute for compliant, independent local emergency exit releases.
+  Keep an operator physically stationed at the door and ready to restore
+  locally, particularly if the network or controller loses connectivity.
+- Simulations remain completely separate: `/emergency/simulate` only
+  records audit incidents and never drives door hardware.
+- The broad red **LIBERAR PUERTAS** action remains disabled by default and
+  must not be enabled until full onsite safety commissioning of approved exits.
+
 ## Before live commissioning (mandatory)
 1. EHS / fire protection specialist approves the egress schedule, applicable
    fire/life-safety requirements and the independently operable **wired**

@@ -27,6 +27,11 @@ export default function EmergencyRelease() {
     const [accepted, setAccepted] = useState(false);
     const [lastResult, setLastResult] = useState(null);
     const [error, setError] = useState('');
+    const [testDoorId, setTestDoorId] = useState('');
+    const [testModal, setTestModal] = useState('');
+    const [testPhrase, setTestPhrase] = useState('');
+    const [testSiteConfirmed, setTestSiteConfirmed] = useState(false);
+    const [testSafetyConfirmed, setTestSafetyConfirmed] = useState(false);
 
     const refresh = useCallback(async () => {
         if (!commander) return;
@@ -56,6 +61,10 @@ export default function EmergencyRelease() {
     const canActivate = Boolean(status?.armed && selected.length && !invalid && !busy);
     const canSimulate = Boolean(selected.length && !invalid && !busy);
     const recentOpenSimulation = (status?.recent || []).find((item) => item.mode === 'simulation' && item.state === 'completed');
+    const activeTest = status?.singleDoorTest;
+    const canStartTest = Boolean(status?.singleDoorTestEnabled && !activeTest && !busy && testDoorId && selected.some((d) => d.id === testDoorId));
+    const canRestoreTest = Boolean(status?.singleDoorTestEnabled && activeTest && ['release_acknowledged', 'release_unknown', 'restore_unknown'].includes(activeTest.state) && !busy);
+    const canFinishTest = Boolean(activeTest && ['restore_acknowledged', 'restore_unknown'].includes(activeTest.state) && !busy);
 
     const configure = async (door, eligible) => {
         if (busy || editing || status?.armed) return;
@@ -134,6 +143,45 @@ export default function EmergencyRelease() {
             await refresh();
         } catch (err) {
             toast.error('No se pudo finalizar el simulacro', { description: responseError(err) });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    // Hardware test: exactly one explicitly chosen door; never the 35-door group.
+    const runSingleDoorAction = async () => {
+        const action = testModal;
+        const expected = action === 'start' ? 'PROBAR' : action === 'restore' ? 'RESTABLECER' : 'VERIFICADO';
+        if (busy || !testSiteConfirmed || !testSafetyConfirmed || testPhrase.trim() !== expected) return;
+        if (action === 'start' && !canStartTest) return;
+        if (action === 'restore' && !canRestoreTest) return;
+        if (action === 'finish' && !canFinishTest) return;
+        const testId = activeTest?.testId;
+        const payload = action === 'start'
+            ? { doorId: testDoorId, confirmation: 'PROBAR', supervisedOnSite: true, egressClear: true, localRestorationReady: true }
+            : action === 'restore'
+                ? { testId, confirmation: 'RESTABLECER', supervisedOnSite: true, egressClear: true, emergencyEnded: true }
+                : { testId, confirmation: 'VERIFICADO', physicallyVerified: true, safeEgressVerified: true };
+        setBusy(true);
+        setTestModal('');
+        setTestPhrase('');
+        setTestSiteConfirmed(false);
+        setTestSafetyConfirmed(false);
+        try {
+            const { data } = await api.post(`/emergency/test-door/${action}`, payload);
+            if (action === 'finish') {
+                toast.success('Prueba individual cerrada tras verificación física');
+            } else if (data.ok) {
+                toast.warning(action === 'start'
+                    ? 'Orden alwaysOpen enviada a UNA puerta; verificar físicamente'
+                    : 'Orden close enviada a UNA puerta; verificar físicamente');
+            } else {
+                toast.error('Respuesta del Gateway incierta. Verificar la puerta en sitio antes de repetir.');
+            }
+            await refresh();
+        } catch (err) {
+            toast.error('La prueba requiere atención', { description: responseError(err) });
+            await refresh();
         } finally {
             setBusy(false);
         }
@@ -272,6 +320,74 @@ export default function EmergencyRelease() {
                 </section>
             </div>
 
+            <section className="rounded-2xl border border-amber-500/35 bg-[#17140f] p-5 sm:p-6" data-testid="single-door-test-panel">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h2 className="flex items-center gap-2 text-lg font-bold text-white"><ShieldAlert size={21} className="text-amber-300"/> Prueba física de UNA puerta</h2>
+                        <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-300">
+                            Esta prueba está aislada del botón rojo general. Envía <code>alwaysOpen</code> únicamente a la puerta elegida y permite solicitar <code>close</code> para esa misma puerta, bajo supervisión.
+                        </p>
+                    </div>
+                    <span className={`rounded-lg border px-3 py-2 text-xs font-bold ${status?.singleDoorTestEnabled ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-white/10 text-slate-500'}`}>
+                        {status?.singleDoorTestEnabled ? 'PRUEBA INDIVIDUAL HABILITADA' : 'PRUEBA INDIVIDUAL NO HABILITADA'}
+                    </span>
+                </div>
+                <p className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs leading-relaxed text-amber-200">
+                    Solo probar con personal presente en ambos lados, sin emergencia activa y con restauración local disponible. No iniciar otra prueba hasta confirmar el estado físico. La respuesta del Gateway NO prueba el estado del relé o de la cerradura.
+                </p>
+                {!activeTest ? (
+                    <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end">
+                        <label className="flex-1 text-xs font-semibold text-slate-300">
+                            Elegir UNA puerta vinculada del protocolo
+                            <select
+                                data-testid="single-test-door-select"
+                                className="mt-2 w-full rounded-xl border border-white/20 bg-[#0b1220] p-3 text-sm text-slate-100"
+                                value={testDoorId}
+                                disabled={busy}
+                                onChange={(e) => setTestDoorId(e.target.value)}
+                            >
+                                <option value="">Seleccionar puerta...</option>
+                                {selected.filter((d) => d.linked).map((d) => (
+                                    <option key={d.id} value={d.id}>{d.code || '—'} · {d.name} · piso {d.floor ?? '—'}</option>
+                                ))}
+                            </select>
+                        </label>
+                        <button
+                            type="button"
+                            data-testid="single-test-start"
+                            disabled={!canStartTest}
+                            onClick={() => { setTestModal('start'); setTestPhrase(''); setTestSiteConfirmed(false); setTestSafetyConfirmed(false); }}
+                            className="rounded-xl border border-amber-500/50 bg-amber-500/15 px-5 py-3 text-sm font-bold text-amber-200 hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-40"
+                        >
+                            PROBAR SOLO ESTA PUERTA
+                        </button>
+                    </div>
+                ) : (
+                    <div className="mt-5 rounded-xl border border-amber-500/25 bg-black/20 p-4">
+                        <p className="text-sm font-bold text-white">{activeTest.doorName}</p>
+                        <p className="mt-1 break-all font-mono text-xs text-slate-500">Prueba {activeTest.testId}</p>
+                        <p className="mt-2 text-sm text-amber-200">Estado: {activeTest.state.replaceAll('_', ' ')} · pendiente de confirmación física</p>
+                        <div className="mt-4 flex flex-wrap gap-3">
+                            <button
+                                type="button" disabled={!canRestoreTest}
+                                data-testid="single-test-restore"
+                                onClick={() => { setTestModal('restore'); setTestPhrase(''); setTestSiteConfirmed(false); setTestSafetyConfirmed(false); }}
+                                className="rounded-xl border border-sky-400/40 bg-sky-500/15 px-4 py-3 text-sm font-bold text-sky-200 disabled:opacity-35"
+                            ><RotateCcw size={16} className="mr-2 inline"/> RESTABLECER ESTA PUERTA</button>
+                            <button
+                                type="button" disabled={!canFinishTest}
+                                data-testid="single-test-finish"
+                                onClick={() => { setTestModal('finish'); setTestPhrase(''); setTestSiteConfirmed(false); setTestSafetyConfirmed(false); }}
+                                className="rounded-xl border border-emerald-400/40 bg-emerald-500/10 px-4 py-3 text-sm font-bold text-emerald-200 disabled:opacity-35"
+                            ><CheckCircle2 size={16} className="mr-2 inline"/> CONFIRMAR RESTABLECIMIENTO FÍSICO</button>
+                        </div>
+                        {['release_unknown', 'restore_unknown'].includes(activeTest.state) && (
+                            <p className="mt-3 text-xs text-rose-200">Estado incierto: comprueba físicamente la puerta antes de continuar.</p>
+                        )}
+                    </div>
+                )}
+            </section>
+
             {lastResult && (
                 <section className="rounded-xl border border-sky-500/25 bg-[#0b1220] p-5" aria-live="polite">
                     <h2 className="flex items-center gap-2 font-semibold text-white">
@@ -377,6 +493,49 @@ export default function EmergencyRelease() {
                     {!status?.recent?.length && <p className="text-sm text-slate-500">No hay activaciones registradas.</p>}
                 </div>
             </section>
+
+            {testModal && (
+                <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/90 p-4" role="presentation">
+                    <div className="w-full max-w-lg rounded-2xl border-2 border-amber-500/45 bg-[#161319] p-6 shadow-2xl" role="dialog" aria-modal="true" aria-label="Confirmar prueba física de puerta">
+                        <h2 className="text-xl font-black text-white">{testModal === 'start' ? 'PROBAR APERTURA SOSTENIDA' : testModal === 'restore' ? 'RESTABLECER UNA PUERTA' : 'CERRAR PRUEBA VERIFICADA'}</h2>
+                        <p className="mt-3 text-sm leading-relaxed text-slate-200">
+                            {testModal === 'start'
+                                ? 'Se enviará alwaysOpen a UNA puerta. Puede quedar desbloqueada hasta restaurarla. Debes estar físicamente presente.'
+                                : testModal === 'restore'
+                                    ? 'Se enviará close SOLO a la puerta de prueba. Verifica que la evacuación concluyó y nadie depende de esa salida.'
+                                    : 'Solo se cerrará el registro después de comprobar físicamente que la puerta volvió a su estado seguro. No se envían comandos.'}
+                        </p>
+                        <label className="mt-5 flex gap-3 text-sm text-slate-200">
+                            <input type="checkbox" className="mt-1 accent-amber-400" checked={testSiteConfirmed} onChange={(e) => setTestSiteConfirmed(e.target.checked)} />
+                            Confirmo supervisión física en sitio y que conozco la puerta seleccionada.
+                        </label>
+                        <label className="mt-4 flex gap-3 text-sm text-slate-200">
+                            <input type="checkbox" className="mt-1 accent-amber-400" checked={testSafetyConfirmed} onChange={(e) => setTestSafetyConfirmed(e.target.checked)} />
+                            {testModal === 'start'
+                                ? 'La ruta está despejada y dispongo del procedimiento local para restablecerla.'
+                                : testModal === 'restore'
+                                    ? 'Seguridad/EHS autorizó restablecer; no existe emergencia activa y la ruta está despejada.'
+                                    : 'Comprobé físicamente el estado seguro de la puerta y que la salida sigue siendo utilizable.'}
+                        </label>
+                        <label className="mt-5 block text-sm font-semibold text-white">
+                            Escribe {testModal === 'start' ? 'PROBAR' : testModal === 'restore' ? 'RESTABLECER' : 'VERIFICADO'} para confirmar
+                            <input
+                                autoFocus autoComplete="off" value={testPhrase} onChange={(e) => setTestPhrase(e.target.value)}
+                                className="mt-2 w-full rounded-xl border border-amber-500/35 bg-black/35 px-4 py-3 font-mono text-white outline-none focus:border-amber-300"
+                            />
+                        </label>
+                        <div className="mt-6 grid grid-cols-2 gap-3">
+                            <button type="button" onClick={() => setTestModal('')} className="rounded-xl border border-white/20 px-3 py-3 text-sm font-semibold text-slate-200">CANCELAR</button>
+                            <button type="button" data-testid="single-test-confirm"
+                                disabled={!testSiteConfirmed || !testSafetyConfirmed || busy || testPhrase.trim() !== (testModal === 'start' ? 'PROBAR' : testModal === 'restore' ? 'RESTABLECER' : 'VERIFICADO')}
+                                onClick={runSingleDoorAction}
+                                className="rounded-xl bg-amber-500 px-3 py-3 text-sm font-black text-black disabled:cursor-not-allowed disabled:opacity-40">
+                                CONFIRMAR
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {closeTarget && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4" role="presentation">

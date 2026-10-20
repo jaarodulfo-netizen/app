@@ -2281,6 +2281,8 @@ async def emergency_status(user=Depends(require_commander)):
     ).sort("startedAt", -1).to_list(8)
     return {
         "armed": emergency_release_armed(),
+        "singleDoorTestEnabled": single_door_test_enabled() and not emergency_release_armed(),
+        "singleDoorTest": single_test_public(await db.emergency_single_test_state.find_one({"_id": "kerma-single-door"})),
         "gatewayOnline": "kerma-monterrey" in gateway_connections,
         "doors": [emergency_door_info(d) for d in doors],
         "recent": recent,
@@ -2453,6 +2455,208 @@ async def close_emergency_simulation(
         "closedAt": now, "hardwareCommandsSent": 0,
         "physicalDoorsChanged": False,
     }
+
+
+
+# --- Isolated physical commissioning of EXACTLY ONE preselected door ---
+# Never changes /emergency/activate: broad release remains independently disabled.
+def single_door_test_enabled() -> bool:
+    return os.environ.get("EMERGENCY_SINGLE_DOOR_TEST_ENABLED", "false").lower() in {"1", "true", "yes"}
+
+
+class SingleDoorTestStart(BaseModel):
+    doorId: str
+    confirmation: str
+    supervisedOnSite: bool
+    egressClear: bool
+    localRestorationReady: bool
+
+
+class SingleDoorTestRestore(BaseModel):
+    testId: str
+    confirmation: str
+    supervisedOnSite: bool
+    egressClear: bool
+    emergencyEnded: bool
+
+
+class SingleDoorTestFinish(BaseModel):
+    testId: str
+    confirmation: str
+    physicallyVerified: bool
+    safeEgressVerified: bool
+
+
+def single_test_public(doc: Optional[dict]) -> Optional[dict]:
+    if not doc or doc.get("state") in {"idle", "closed"}:
+        return None
+    return {
+        "testId": doc.get("testId"),
+        "doorId": doc.get("doorId"),
+        "doorName": doc.get("doorName"),
+        "state": doc.get("state"),
+        "startedAt": doc.get("startedAt"),
+        "updatedAt": doc.get("updatedAt"),
+        "operator": doc.get("operator"),
+        "gatewayAcknowledged": doc.get("state") in {"release_acknowledged", "restore_sending", "restore_acknowledged"},
+        "warning": "Gateway acknowledgement does not prove a physical unlock or relock.",
+    }
+
+
+@api_router.post("/emergency/test-door/start")
+async def start_single_emergency_test(body: SingleDoorTestStart, request: Request, user=Depends(require_commander)):
+    if not single_door_test_enabled() or emergency_release_armed():
+        raise HTTPException(status_code=423, detail="Single-door commissioning is not enabled separately from the emergency bulk release")
+    if body.confirmation != "PROBAR" or not all([body.supervisedOnSite, body.egressClear, body.localRestorationReady]):
+        raise HTTPException(status_code=400, detail="Supervised physical test checklist and PROBAR confirmation are required")
+    try:
+        oid = ObjectId(body.doorId)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid door")
+    door = await db.doors.find_one({"_id": oid, "emergencyEgress": True})
+    if not door:
+        raise HTTPException(status_code=404, detail="Choose one existing emergency-group door")
+    validate_emergency_targets([door])
+    if "kerma-monterrey" not in gateway_connections:
+        raise HTTPException(status_code=503, detail="Local Gateway offline: no physical test attempted")
+    from pymongo.errors import DuplicateKeyError
+    from pymongo import ReturnDocument
+    now = datetime.now(timezone.utc)
+    test_id = uuid.uuid4().hex
+    # A single persistent record is a cross-browser/process interlock.
+    # When a command times out it remains blocked until physical verification.
+    try:
+        pending = await db.emergency_single_test_state.find_one_and_update(
+            {
+                "_id": "kerma-single-door",
+                "$or": [{"state": {"$in": ["idle", "closed"]}}, {"state": {"$exists": False}}],
+            },
+            {"$set": {
+                "state": "release_sending", "testId": test_id,
+                "doorId": body.doorId, "doorName": door.get("name") or door.get("code"),
+                "deviceId": door["gatewayDeviceId"], "doorNo": int(door["doorNo"]),
+                "startedAt": now, "updatedAt": now, "operator": user.get("email"),
+            }},
+            upsert=True, return_document=ReturnDocument.AFTER,
+        )
+    except DuplicateKeyError:
+        raise HTTPException(status_code=409, detail="Another single-door test is not fully restored and closed")
+    if not pending or pending.get("testId") != test_id:
+        raise HTTPException(status_code=409, detail="Another single-door test is in progress")
+
+    await db.emergency_release_audit.insert_one({
+        "type": "single_door_test_started", "testId": test_id,
+        "doorId": body.doorId, "doorName": pending["doorName"],
+        "actor": user.get("email"), "at": now,
+        "sourceIp": request.client.host if request.client else None,
+        "supervisedOnSite": True, "localRestorationReady": True,
+    })
+    state = "release_unknown"
+    error = None
+    try:
+        # EXACTLY ONE command; cannot dispatch the bulk emergency release.
+        await send_gateway_command({
+            "kind": "door.open",
+            "deviceId": pending["deviceId"],
+            "doorNo": pending["doorNo"],
+            "cmd": "alwaysOpen",
+        })
+        state = "release_acknowledged"
+    except Exception as exc:
+        error = str(exc)[:240]
+    await db.emergency_single_test_state.update_one(
+        {"_id": "kerma-single-door", "testId": test_id, "state": "release_sending"},
+        {"$set": {"state": state, "updatedAt": datetime.now(timezone.utc)}},
+    )
+    await db.emergency_release_audit.insert_one({
+        "type": "single_door_test_release_result", "testId": test_id,
+        "actor": user.get("email"), "at": datetime.now(timezone.utc),
+        "state": state, "error": error,
+        "hardwareCommandsAttempted": 1,
+        "physicalVerification": "REQUIRED",
+    })
+    return {
+        "ok": state == "release_acknowledged", "testId": test_id,
+        "state": state, "doorName": pending["doorName"],
+        "command": "alwaysOpen", "hardwareCommandsAttempted": 1,
+        "physicalVerification": "REQUIRED",
+        "error": error,
+    }
+
+
+@api_router.post("/emergency/test-door/restore")
+async def restore_single_emergency_test(body: SingleDoorTestRestore, request: Request, user=Depends(require_commander)):
+    if not single_door_test_enabled() or emergency_release_armed():
+        raise HTTPException(status_code=423, detail="Test restoration unavailable while bulk release is armed")
+    if body.confirmation != "RESTABLECER" or not all([body.supervisedOnSite, body.egressClear, body.emergencyEnded]):
+        raise HTTPException(status_code=400, detail="Safety clearance and RESTABLECER confirmation required")
+    from pymongo import ReturnDocument
+    active = await db.emergency_single_test_state.find_one_and_update(
+        {
+            "_id": "kerma-single-door",
+            "testId": body.testId,
+            "state": {"$in": ["release_acknowledged", "release_unknown", "restore_unknown"]},
+        },
+        {"$set": {"state": "restore_sending", "updatedAt": datetime.now(timezone.utc)}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not active:
+        raise HTTPException(status_code=409, detail="No matching active single-door test can be restored")
+    state = "restore_unknown"
+    error = None
+    try:
+        await send_gateway_command({
+            "kind": "door.open",
+            "deviceId": active["deviceId"],
+            "doorNo": active["doorNo"],
+            "cmd": "close",
+        })
+        state = "restore_acknowledged"
+    except Exception as exc:
+        error = str(exc)[:240]
+    await db.emergency_single_test_state.update_one(
+        {"_id": "kerma-single-door", "testId": body.testId, "state": "restore_sending"},
+        {"$set": {"state": state, "updatedAt": datetime.now(timezone.utc)}},
+    )
+    await db.emergency_release_audit.insert_one({
+        "type": "single_door_test_restore_result", "testId": body.testId,
+        "actor": user.get("email"), "at": datetime.now(timezone.utc),
+        "state": state, "error": error, "hardwareCommandsAttempted": 1,
+        "physicalVerification": "REQUIRED",
+    })
+    return {
+        "ok": state == "restore_acknowledged", "testId": body.testId,
+        "state": state, "hardwareCommandsAttempted": 1,
+        "physicalVerification": "REQUIRED", "error": error,
+    }
+
+
+@api_router.post("/emergency/test-door/finish")
+async def finish_single_emergency_test(body: SingleDoorTestFinish, user=Depends(require_commander)):
+    if body.confirmation != "VERIFICADO" or not (body.physicallyVerified and body.safeEgressVerified):
+        raise HTTPException(status_code=400, detail="Physical inspection and VERIFICADO confirmation are required")
+    from pymongo import ReturnDocument
+    now = datetime.now(timezone.utc)
+    result = await db.emergency_single_test_state.find_one_and_update(
+        {
+            "_id": "kerma-single-door", "testId": body.testId,
+            "state": {"$in": ["restore_acknowledged", "restore_unknown"]},
+        },
+        {"$set": {
+            "state": "closed", "updatedAt": now,
+            "verifiedAt": now, "verifiedBy": user.get("email"),
+        }},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not result:
+        raise HTTPException(status_code=409, detail="Restore command must be attempted and physical state verified first")
+    await db.emergency_release_audit.insert_one({
+        "type": "single_door_test_physically_closed", "testId": body.testId,
+        "actor": user.get("email"), "at": now,
+        "physicallyVerified": True, "safeEgressVerified": True,
+        "hardwareCommandsAttempted": 0,
+    })
+    return {"ok": True, "testId": body.testId, "state": "closed", "hardwareCommandsAttempted": 0}
 
 
 @api_router.post("/emergency/activate")
