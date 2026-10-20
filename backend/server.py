@@ -734,20 +734,25 @@ async def create_officer_event(body: OfficerEventIn, user=Depends(get_current_us
 
 # --- RTSP → HLS live streaming ---
 
-def make_stream_token(camera_id: str, exp: int) -> str:
-    msg = f"{camera_id}.{exp}"
+def make_stream_token(camera_id: str, exp: int, user_id: str) -> str:
+    # Bind stream URLs to a real active user; permission changes revoke access.
+    msg = f"{camera_id}.{user_id}.{exp}"
     sig = hmac.new(os.environ["STREAM_SIGNING_KEY"].encode(), msg.encode(), hashlib.sha256).hexdigest()
     return f"{msg}.{sig}"
 
 
-def check_stream_token(camera_id: str, token: str) -> bool:
+def check_stream_token(camera_id: str, token: str) -> Optional[str]:
     try:
-        cid, exp, sig = token.split(".")
-        msg = f"{cid}.{exp}"
+        cid, user_id, exp, sig = token.split(".")
+        if not ObjectId.is_valid(user_id):
+            return None
+        msg = f"{cid}.{user_id}.{exp}"
         expected = hmac.new(os.environ["STREAM_SIGNING_KEY"].encode(), msg.encode(), hashlib.sha256).hexdigest()
-        return cid == camera_id and int(exp) > int(datetime.now().timestamp()) and hmac.compare_digest(sig, expected)
+        if cid != camera_id or int(exp) <= int(datetime.now().timestamp()):
+            return None
+        return user_id if hmac.compare_digest(sig, expected) else None
     except Exception:
-        return False
+        return None
 
 
 async def watch_stream(camera_id: str, proc):
@@ -772,7 +777,7 @@ async def start_stream(camera_id: str, user=Depends(require_cctv)):
         raise HTTPException(status_code=404, detail="Camera not found")
     if not cam.get("rtsp"):
         raise HTTPException(status_code=400, detail="No RTSP URL configured for this channel")
-    token = make_stream_token(camera_id, int(datetime.now().timestamp() + 3600))
+    token = make_stream_token(camera_id, int(datetime.now().timestamp() + 600), str(user["_id"]))
     if camera_id in stream_procs:
         return {"state": stream_status.get(camera_id, {}).get("state", "connecting"), "token": token}
     out = HLS_ROOT / camera_id
@@ -823,8 +828,12 @@ async def stream_state(camera_id: str, user=Depends(require_cctv)):
 async def hls_file(camera_id: str, file_path: str, token: str = ""):
     from fastapi.responses import FileResponse
 
-    if not token or not check_stream_token(camera_id, token):
+    user_id = check_stream_token(camera_id, token) if token else None
+    if not user_id:
         raise HTTPException(status_code=403, detail="Invalid stream token")
+    stream_user = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not stream_user or not stream_user.get("is_active", True) or not effective_permissions(stream_user)["cctv"]:
+        raise HTTPException(status_code=403, detail="CCTV permission revoked")
     if Path(file_path).name != file_path or Path(file_path).suffix not in {".m3u8", ".ts"}:
         raise HTTPException(status_code=403, detail="Invalid file")
     p = (HLS_ROOT / camera_id / file_path).resolve()
