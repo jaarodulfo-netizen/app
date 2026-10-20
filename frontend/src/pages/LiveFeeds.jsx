@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Hls from 'hls.js';
 import { ExternalLink, Grid2X2, Grid3X3, GridIcon, Maximize2, MonitorUp, Search, Trash2, X, Loader2, CircleAlert, PanelLeftClose, PanelLeftOpen, Expand } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -91,7 +92,96 @@ function GatewaySnapshot({ cam }) {
     );
 }
 
-function WallCell({ cam, index, selected, onSelect, onFocus, onDropCamera, onRemove }) {
+// Native browser HLS via the private outbound Windows Gateway tunnel.
+// Falls back to legacy stills if the onsite Gateway has not been upgraded yet.
+function GatewayLiveVideo({ cam, quality }) {
+    const videoRef = useRef(null);
+    const [ready, setReady] = useState(false);
+    const [fallback, setFallback] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        let active = true;
+        let hls = null;
+        let video = videoRef.current;
+        setReady(false);
+        setFallback(false);
+        setError('');
+        const initialize = async () => {
+            try {
+                const { data } = await api.post(`/cameras/${cam.id}/live/start`, { quality }, { timeout: 16000 });
+                if (!active) return;
+                if (!data?.ok || !data?.playlistUrl) throw new Error('HLS Gateway unavailable');
+                const url = new URL(data.playlistUrl, process.env.REACT_APP_BACKEND_URL).toString();
+                if (Hls.isSupported()) {
+                    hls = new Hls({
+                        lowLatencyMode: false,
+                        liveSyncDurationCount: 2,
+                        maxBufferLength: 12,
+                        maxLiveSyncPlaybackRate: 1.5,
+                        enableWorker: true,
+                    });
+                    hls.on(Hls.Events.ERROR, (_event, state) => {
+                        if (!active) return;
+                        if (state.fatal) {
+                            setError('Video HD interrumpido; se muestran capturas de respaldo');
+                            setFallback(true);
+                            hls?.destroy();
+                            hls = null;
+                        }
+                    });
+                    hls.attachMedia(video);
+                    hls.on(Hls.Events.MEDIA_ATTACHED, () => hls?.loadSource(url));
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        if (!active) return;
+                        video?.play()?.catch(() => {});
+                        setReady(true);
+                    });
+                } else if (video?.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = url;
+                    video.play().catch(() => {});
+                    setReady(true);
+                } else {
+                    throw new Error('Navegador sin reproductor HLS');
+                }
+            } catch (err) {
+                if (!active) return;
+                setError(formatApiError(err.response?.data?.detail || err.message) || 'Gateway HLS no disponible');
+                setFallback(true);
+            }
+        };
+        initialize();
+        return () => {
+            active = false;
+            hls?.destroy();
+            video?.pause();
+            if (video) { video.removeAttribute('src'); video.load(); }
+        };
+    }, [cam.id, quality]);
+
+    return (
+        <div className="absolute inset-0 bg-black">
+            {fallback ? (
+                <>
+                    <GatewaySnapshot cam={cam} />
+                    <div className="pointer-events-none absolute bottom-11 right-2 z-20 max-w-[80%] rounded bg-amber-950/85 p-1.5 text-[9px] text-amber-200">
+                        {error || 'Gateway local pendiente de actualizar para HLS'}
+                    </div>
+                </>
+            ) : (
+                <>
+                    <video ref={videoRef} muted autoPlay playsInline controls={false}
+                        className="absolute inset-0 h-full w-full bg-black object-contain" />
+                    <div className="pointer-events-none absolute left-2 top-2 rounded bg-black/70 px-2 py-1 text-[9px] text-emerald-200">
+                        {ready ? (quality === 'main' ? 'LIVE HD · PRINCIPAL · 1080P MÁX.' : 'LIVE H.264 · SUBSTREAM') : 'CONECTANDO VIDEO CONTINUO…'}
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+function WallCell({ cam, quality, index, selected, onSelect, onFocus, onDropCamera, onRemove }) {
     const onDrop = (e) => {
         e.preventDefault();
         const cameraId = e.dataTransfer.getData('application/x-kerma-camera') || e.dataTransfer.getData('text/plain');
@@ -109,7 +199,7 @@ function WallCell({ cam, index, selected, onSelect, onFocus, onDropCamera, onRem
         >
             {cam ? (
                 <>
-                    <GatewaySnapshot cam={cam} />
+                    <GatewayLiveVideo cam={cam} quality={quality} />
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/75 via-black/20 to-transparent px-2.5 pb-2 pt-8 opacity-80 group-hover:opacity-100">
                         <div className="truncate mono text-[9px] tracking-wider text-white">{cam.label}</div>
                         <div className="truncate mono text-[8px] tracking-wider text-slate-400">{cam.nvrName || 'NVR'} · CH {cam.channelNo || '—'}</div>
@@ -297,6 +387,7 @@ function VideoWall() {
                         key={index}
                         index={index}
                         cam={cam}
+                        quality={wall.slots === 1 ? "main" : "sub"}
                         selected={activeSlot === index}
                         onSelect={setActiveSlot}
                         onFocus={focus}
