@@ -2356,6 +2356,8 @@ async def bulk_configure_emergency_doors(body: EmergencyBulkSelection, user=Depe
 
 @api_router.put("/emergency/doors/{item_id}")
 async def configure_emergency_door(item_id: str, body: EmergencyDoorSelection, user=Depends(require_commander)):
+    if emergency_release_armed():
+        raise HTTPException(status_code=423, detail="Disable live release before editing the evacuation group")
     try:
         oid = ObjectId(item_id)
     except Exception:
