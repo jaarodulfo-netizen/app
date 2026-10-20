@@ -1104,8 +1104,8 @@ export default function Employees() {
                                                             data-testid={`retry-sync-${emp.id}`}
                                                             disabled={user?.permissions?.sync !== true}
                                                             onClick={() => retryHardwareSync(emp)}
-                                                            disabled={retryingId === emp.id}
-                                                            title="Re-queue this employee on assigned devices (does not prove physical access)"
+                                                            disabled={retryingId === emp.id || user?.permissions?.sync !== true}
+                                                            title={user?.permissions?.sync !== true ? 'Tu cuenta necesita permiso Manual Sync' : 'Re-queue this employee on assigned devices (does not prove physical access)'}
                                                             className="flex items-center gap-1.5 rounded-md border border-orange-400/25 px-3 py-2 mono text-[9px] tracking-widest text-orange-300 hover:bg-orange-400/10 disabled:opacity-40"
                                                         >
                                                             <RefreshCw size={12} className={retryingId === emp.id ? 'animate-spin' : ''} />
