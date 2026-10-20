@@ -18,7 +18,7 @@ const NAV = [
 export function Sidebar() {
     const { user } = useAuth();
     const [gatewayOnline, setGatewayOnline] = useState(false);
-    const items = NAV.filter((n) => !n.commanderOnly || user?.role === 'commander');
+    const items = NAV.filter((n) => (!n.commanderOnly || user?.role === 'commander') && (n.to !== '/feeds' || user?.permissions?.cctv !== false));
 
     useEffect(() => {
         let mounted = true;

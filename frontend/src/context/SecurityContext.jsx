@@ -23,7 +23,7 @@ export function SecurityProvider({ children }) {
     const firstFetchRef = useRef(true);
 
     useEffect(() => {
-        Promise.all([api.get('/employees'), api.get('/cameras'), api.get('/devices'), api.get('/doors')])
+        Promise.all([api.get('/employees'), user?.permissions?.cctv === false ? Promise.resolve({ data: [] }) : api.get('/cameras'), api.get('/devices'), api.get('/doors')])
             .then(([e, c, d, dr]) => {
                 setEmployees(e.data);
                 setCameras(c.data);
