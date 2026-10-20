@@ -35,7 +35,7 @@ export function SecurityProvider({ children }) {
                 setCameras([]);
                 setDevices([]);
             });
-    }, []);
+    }, [user?.permissions?.cctv]);
 
     const fetchEvents = useCallback(async () => {
         try {
