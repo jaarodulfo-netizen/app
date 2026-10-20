@@ -32,6 +32,9 @@ export default function EmergencyRelease() {
     const [testPhrase, setTestPhrase] = useState('');
     const [testSiteConfirmed, setTestSiteConfirmed] = useState(false);
     const [testSafetyConfirmed, setTestSafetyConfirmed] = useState(false);
+    const [diagnosticFaceId, setDiagnosticFaceId] = useState('');
+    const [diagnosticBusy, setDiagnosticBusy] = useState(false);
+    const [diagnosticResult, setDiagnosticResult] = useState(null);
 
     const refresh = useCallback(async () => {
         if (!commander) return;
@@ -65,6 +68,21 @@ export default function EmergencyRelease() {
     const canStartTest = Boolean(status?.singleDoorTestEnabled && !activeTest && !busy && testDoorId && selected.some((d) => d.id === testDoorId));
     const canRestoreTest = Boolean(status?.singleDoorTestEnabled && activeTest && ['release_acknowledged', 'release_unknown', 'restore_unknown'].includes(activeTest.state) && !busy);
     const canFinishTest = Boolean(activeTest && ['restore_acknowledged', 'restore_unknown'].includes(activeTest.state) && !busy);
+
+    const inspectFacial = async () => {
+        if (!diagnosticFaceId || diagnosticBusy) return;
+        setDiagnosticBusy(true);
+        setDiagnosticResult(null);
+        try {
+            const { data } = await api.get(`/emergency/facial-diagnostics/${diagnosticFaceId}`, { timeout: 75000 });
+            setDiagnosticResult(data);
+            toast.success('Diagnóstico facial de solo lectura completado');
+        } catch (err) {
+            toast.error('No se pudo leer el terminal facial', { description: responseError(err) });
+        } finally {
+            setDiagnosticBusy(false);
+        }
+    };
 
     const configure = async (door, eligible) => {
         if (busy || editing || status?.armed) return;
@@ -319,6 +337,43 @@ export default function EmergencyRelease() {
                     </div>
                 </section>
             </div>
+
+            <section className="rounded-2xl border border-sky-500/30 bg-[#0b1220] p-5" data-testid="facial-emergency-diagnostics">
+                <div className="flex items-center gap-2">
+                    <CircleHelp size={19} className="text-sky-300" />
+                    <h2 className="text-lg font-bold text-white">Diagnóstico de faciales · SIN abrir puertas</h2>
+                </div>
+                <p className="mt-2 text-sm text-slate-300">
+                    Consulta modelo, firmware, capacidades ISAPI y estado de la salida. No envía órdenes al relé.
+                    El modo de apertura sostenida sigue sin certificarse hasta una prueba física controlada.
+                </p>
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                    <select
+                        data-testid="facial-diagnostic-select"
+                        className="min-w-0 flex-1 rounded-xl border border-white/20 bg-[#0b1220] p-3 text-sm text-white"
+                        value={diagnosticFaceId} onChange={(e) => { setDiagnosticFaceId(e.target.value); setDiagnosticResult(null); }}
+                    >
+                        <option value="">Seleccionar un terminal facial</option>
+                        {(status?.facialDevices || []).map((d) => (
+                            <option key={d.id} value={d.id}>{d.name} · {d.id}</option>
+                        ))}
+                    </select>
+                    <button type="button" disabled={!diagnosticFaceId || diagnosticBusy || !status?.gatewayOnline}
+                        onClick={inspectFacial} data-testid="facial-diagnostic-run"
+                        className="rounded-xl border border-sky-400/40 bg-sky-500/10 px-5 py-3 text-sm font-bold text-sky-200 disabled:opacity-40">
+                        {diagnosticBusy ? 'CONSULTANDO EQUIPO…' : 'CONSULTAR SIN ACCIONAR'}
+                    </button>
+                </div>
+                {diagnosticResult && (
+                    <div className="mt-4 rounded-lg border border-sky-500/20 bg-black/25 p-4">
+                        <p className="text-sm font-bold text-sky-200">{diagnosticResult.name} · Solo lectura</p>
+                        <pre className="mt-3 max-h-[380px] overflow-auto whitespace-pre-wrap break-all text-xs text-slate-300">
+                            {JSON.stringify(diagnosticResult.results, null, 2)}
+                        </pre>
+                        <p className="mt-3 text-xs text-amber-200">{diagnosticResult.conclusion}</p>
+                    </div>
+                )}
+            </section>
 
             <section className="rounded-2xl border border-amber-500/35 bg-[#17140f] p-5 sm:p-6" data-testid="single-door-test-panel">
                 <div className="flex flex-wrap items-center justify-between gap-3">
