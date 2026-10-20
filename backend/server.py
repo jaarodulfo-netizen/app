@@ -2597,6 +2597,11 @@ async def emergency_status(user=Depends(require_commander)):
         "singleDoorTestEnabled": single_door_test_enabled() and not emergency_release_armed(),
         "singleDoorTest": single_test_public(await db.emergency_single_test_state.find_one({"_id": "kerma-single-door"})),
         "gatewayOnline": "kerma-monterrey" in gateway_connections,
+        "facialDevices": [
+            {"id": d["gatewayDeviceId"], "name": d.get("name") or d["gatewayDeviceId"]}
+            async for d in db.devices.find({"type": "face"}, {"gatewayDeviceId": 1, "name": 1})
+            if d.get("gatewayDeviceId")
+        ],
         "doors": [emergency_door_info(d) for d in doors],
         "recent": recent,
         "warning": "Gateway acknowledgement is not physical door verification. Local independent fire-egress release is required.",
