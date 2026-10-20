@@ -55,6 +55,73 @@ function SessionList({ officerId }) {
     );
 }
 
+function OfficerCapabilities({ officer, onSaved }) {
+    const [draft, setDraft] = useState({
+        enrollment: officer.permissions?.enrollment ?? true,
+        sync: officer.permissions?.sync ?? false,
+        cctv: officer.permissions?.cctv ?? true,
+    });
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        setDraft({
+            enrollment: officer.permissions?.enrollment ?? true,
+            sync: officer.permissions?.sync ?? false,
+            cctv: officer.permissions?.cctv ?? true,
+        });
+    }, [officer.id, officer.permissions?.enrollment, officer.permissions?.sync, officer.permissions?.cctv]);
+
+    const save = async (permissions) => {
+        if (saving || officer.role !== 'officer') return;
+        setSaving(true);
+        try {
+            await api.put(`/auth/officers/${officer.id}/permissions`, permissions);
+            toast.success('Permisos guardados', { description: `${officer.name}: cambios efectivos en el servidor inmediatamente.` });
+            onSaved();
+        } catch (err) {
+            toast.error('No se pudieron guardar permisos', { description: formatApiError(err?.response?.data?.detail || err?.message) });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    if (officer.role !== 'officer') return null;
+    return (
+        <div className="mx-5 mt-4 rounded-xl border border-sky-500/20 bg-[#101b2b] p-4" data-testid={`officer-permissions-${officer.id}`}>
+            <p className="text-sm font-bold text-white">PERMISOS DE ACCESO</p>
+            <p className="mt-1 text-xs text-slate-400">Configura por cuenta. No hay acceso a CCTV si está desmarcado, incluso usando la URL directa.</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                {[
+                    ['enrollment', 'Enrollment', 'Altas y edición de personal'],
+                    ['sync', 'Manual Sync', 'Reenviar altas a dispositivos'],
+                    ['cctv', 'CCTV / NVR', 'Video, cámaras y grabadores'],
+                ].map(([key, label, desc]) => (
+                    <label key={key} className="flex items-start gap-3 rounded-lg border border-white/10 bg-black/15 p-3 text-xs text-slate-200">
+                        <input type="checkbox" checked={draft[key]} onChange={(e) => setDraft((prev) => ({
+                            ...prev, [key]: e.target.checked,
+                            ...(key === 'enrollment' && !e.target.checked ? { sync: false } : {}),
+                        }))} className="mt-0.5 accent-sky-400" />
+                        <span><strong className="block">{label}</strong><span className="mt-1 block text-slate-500">{desc}</span></span>
+                    </label>
+                ))}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+                <button type="button" disabled={saving}
+                    onClick={() => save({ enrollment: true, sync: true, cctv: false })}
+                    data-testid={`officer-enrollment-no-cctv-${officer.id}`}
+                    className="rounded-lg border border-emerald-400/35 bg-emerald-500/10 px-3 py-2 text-xs font-bold text-emerald-200 disabled:opacity-40">
+                    PERFIL: ENROLLMENT + SYNC · SIN CCTV
+                </button>
+                <button type="button" disabled={saving || (draft.sync && !draft.enrollment)}
+                    onClick={() => save(draft)}
+                    className="rounded-lg bg-sky-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40">
+                    {saving ? 'GUARDANDO...' : 'GUARDAR PERMISOS'}
+                </button>
+            </div>
+        </div>
+    );
+}
+
 export default function Officers() {
     const { user } = useAuth();
     const [officers, setOfficers] = useState([]);
@@ -307,6 +374,7 @@ export default function Officers() {
                                             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
                                             className="overflow-hidden border-t border-white/5"
                                         >
+                                            <OfficerCapabilities officer={o} onSaved={load} />
                                             <SessionList officerId={o.id} />
                                         </motion.div>
                                     )}
