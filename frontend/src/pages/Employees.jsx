@@ -867,6 +867,7 @@ function HistoricIvmsComparison() {
 
 export default function Employees() {
     const { employees, devices, deleteEmployee, refreshEmployees } = useSecurity();
+    const { user } = useAuth();
     const [open, setOpen] = useState(false);
     const [accessLevelsOpen, setAccessLevelsOpen] = useState(false);
     const [editing, setEditing] = useState(null);
@@ -1101,6 +1102,7 @@ export default function Employees() {
                                                     {cards.length > 0 && emp.source !== 'iVMS-4200' && (
                                                         <button
                                                             data-testid={`retry-sync-${emp.id}`}
+                                                            disabled={user?.permissions?.sync !== true}
                                                             onClick={() => retryHardwareSync(emp)}
                                                             disabled={retryingId === emp.id}
                                                             title="Re-queue this employee on assigned devices (does not prove physical access)"
