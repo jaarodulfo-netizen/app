@@ -28,8 +28,15 @@ It must never be treated as the primary emergency release mechanism.
 - Gateway ACK is reported explicitly as **NOT PHYSICALLY VERIFIED**. The
   dashboard does not mark doors physically unlocked without feedback.
 - **No automatic re-lock.** Any eventual reset must be an independently
-  authorized, physically supervised site procedure. This change does not
-  implement a remote reset.
+  authorized, physically supervised site procedure.
+- The **FINALIZAR SIMULACRO** action closes an existing simulated incident
+  administratively (from `completed` to `closed`) and records the commander,
+  time, and audit. It sends **zero hardware commands**, is available for
+  completed simulations only, and is not a physical restoration.
+- **RESTABLECER PUERTAS FÍSICAS** appears disabled in the interface on purpose.
+  It cannot remotely relock doors. Reinstating normal access controls must
+  await independently verified evacuation completion and onsite sign-off.
+  A live incident cannot be closed with the simulation endpoint.
 
 ## Before live commissioning (mandatory)
 1. EHS / fire protection specialist approves the egress schedule, applicable
@@ -67,6 +74,7 @@ a simulated incident does not test any hardware.
 - `PUT /api/emergency/doors/{doorId}` — `{"eligible":true|false}` (setup only).
 - `PUT /api/emergency/doors/bulk` — `{"mode":"select_all_mapped"|"clear_all","confirmation":"CONFIGURAR"}` (setup only; no hardware command).
 - `POST /api/emergency/simulate` — audit-only, no controller command.
+- `POST /api/emergency/simulations/{incidentId}/close` — `{"confirmation":"FINALIZAR"}`; administrative-only closing of a completed simulation (Commander).
 - `POST /api/emergency/activate` — `{"confirmation":"LIBERAR"}`, live
   only when armed server-side.
 
