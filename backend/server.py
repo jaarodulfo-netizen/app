@@ -129,6 +129,27 @@ class OfficerUpdate(BaseModel):
     active: bool
 
 
+class OfficerPermissionUpdate(BaseModel):
+    enrollment: bool
+    sync: bool
+    cctv: bool
+
+
+OFFICER_DEFAULT_PERMISSIONS = {"enrollment": True, "sync": False, "cctv": True}
+
+
+def effective_permissions(user: dict) -> dict:
+    if user.get("role") == "commander":
+        return {"enrollment": True, "sync": True, "cctv": True}
+    stored = user.get("permissions") or {}
+    return {key: bool(stored.get(key, val)) for key, val in OFFICER_DEFAULT_PERMISSIONS.items()}
+
+
+def ensure_permission(user: dict, capability: str) -> None:
+    if not effective_permissions(user).get(capability, False):
+        raise HTTPException(status_code=403, detail=f"Missing {capability} permission")
+
+
 class EmployeeIn(BaseModel):
     name: str
     role: str = ""
@@ -257,6 +278,7 @@ def public_user(u: dict) -> dict:
         "email": u["email"],
         "name": u["name"],
         "role": u["role"],
+        "permissions": effective_permissions(u),
         "is_active": u.get("is_active", True),
         "must_change_password": u.get("must_change_password", False),
         "last_login": iso(u.get("last_login")),
@@ -319,6 +341,22 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)
 async def require_commander(user=Depends(get_current_user)):
     if user.get("role") != "commander":
         raise HTTPException(status_code=403, detail="Commander role required")
+    return user
+
+
+async def require_cctv(user=Depends(get_current_user)):
+    ensure_permission(user, "cctv")
+    return user
+
+
+async def require_enrollment(user=Depends(get_current_user)):
+    ensure_permission(user, "enrollment")
+    return user
+
+
+async def require_manual_sync(user=Depends(get_current_user)):
+    ensure_permission(user, "enrollment")
+    ensure_permission(user, "sync")
     return user
 
 
@@ -448,6 +486,32 @@ async def set_officer_active(officer_id: str, body: OfficerUpdate, user=Depends(
         await db.sessions.delete_many({"user_id": str(target["_id"])})
     updated = await db.users.find_one({"_id": target["_id"]})
     return public_user(updated)
+
+
+@api_router.put("/auth/officers/{officer_id}/permissions")
+async def update_officer_permissions(officer_id: str, body: OfficerPermissionUpdate, user=Depends(require_commander)):
+    try:
+        oid = ObjectId(officer_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid officer ID")
+    target = await db.users.find_one({"_id": oid})
+    if not target:
+        raise HTTPException(status_code=404, detail="Officer not found")
+    if target.get("role") != "officer":
+        raise HTTPException(status_code=403, detail="Only officer capabilities can be edited")
+    permissions = body.model_dump()
+    now = datetime.now(timezone.utc)
+    await db.users.update_one(
+        {"_id": oid, "role": "officer"},
+        {"$set": {"permissions": permissions, "permissionsUpdatedAt": now,
+                  "permissionsUpdatedBy": user["email"]}},
+    )
+    await db.security_permission_audit.insert_one({
+        "type": "officer_permissions_changed", "targetUserId": str(oid),
+        "targetEmail": target["email"], "previous": effective_permissions(target),
+        "updated": permissions, "actor": user["email"], "at": now,
+    })
+    return public_user(await db.users.find_one({"_id": oid}))
 
 
 @api_router.delete("/auth/officers/{officer_id}")
@@ -702,7 +766,7 @@ async def watch_stream(camera_id: str, proc):
 
 
 @api_router.post("/cameras/{camera_id}/stream/start")
-async def start_stream(camera_id: str, user=Depends(get_current_user)):
+async def start_stream(camera_id: str, user=Depends(require_cctv)):
     cam = await db.cameras.find_one({"_id": ObjectId(camera_id)})
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -739,7 +803,7 @@ async def start_stream(camera_id: str, user=Depends(get_current_user)):
 
 
 @api_router.post("/cameras/{camera_id}/stream/stop")
-async def stop_stream(camera_id: str, user=Depends(get_current_user)):
+async def stop_stream(camera_id: str, user=Depends(require_cctv)):
     proc = stream_procs.get(camera_id)
     if proc and proc.returncode is None:
         proc.terminate()
@@ -747,7 +811,7 @@ async def stop_stream(camera_id: str, user=Depends(get_current_user)):
 
 
 @api_router.get("/cameras/{camera_id}/stream/status")
-async def stream_state(camera_id: str, user=Depends(get_current_user)):
+async def stream_state(camera_id: str, user=Depends(require_cctv)):
     st = stream_status.get(camera_id, {"state": "stopped"})
     if st.get("state") == "connecting" and (HLS_ROOT / camera_id / "index.m3u8").exists():
         st = {"state": "live", "stderrTail": st.get("stderrTail", [])}
@@ -1857,13 +1921,13 @@ async def compare_historic_ivms_roster(user=Depends(require_commander)):
 
 
 @api_router.get("/employees")
-async def list_employees(user=Depends(get_current_user)):
+async def list_employees(user=Depends(require_enrollment)):
     docs = await db.employees.find().sort("created_at", -1).to_list(500)
     return [doc_id(d) for d in docs]
 
 
 @api_router.post("/employees")
-async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
+async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     card_no = str(body.cardNo or "").strip()
     if not card_no.isdigit() or len(card_no) != 10:
         raise HTTPException(status_code=400, detail="Card number must be exactly 10 digits, including leading zeros")
@@ -1909,7 +1973,7 @@ async def create_employee(body: EmployeeIn, user=Depends(get_current_user)):
 
 
 @api_router.put("/employees/{item_id}")
-async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_current_user)):
+async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(require_enrollment)):
     try:
         oid = ObjectId(item_id)
     except Exception:
@@ -1995,11 +2059,8 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(get_c
 
 
 @api_router.post("/employees/{item_id}/retry-sync")
-async def retry_employee_sync(item_id: str, user=Depends(get_current_user)):
-    # A retry uses the EXISTING employee/card/explicit doorRights.
-    # No second employee is created and no device permission is inferred.
-    if user.get("role") != "commander":
-        raise HTTPException(status_code=403, detail="Only the commander can retry hardware enrollment")
+async def retry_employee_sync(item_id: str, user=Depends(require_manual_sync)):
+    # A retry uses existing explicit door rights. No second employee is created.
     try:
         oid = ObjectId(item_id)
     except Exception as exc:
@@ -2039,7 +2100,7 @@ async def retry_employee_sync(item_id: str, user=Depends(get_current_user)):
 
 
 @api_router.delete("/employees/{item_id}")
-async def delete_employee(item_id: str, user=Depends(get_current_user)):
+async def delete_employee(item_id: str, user=Depends(require_enrollment)):
     r = await db.employees.delete_one({"_id": ObjectId(item_id)})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -2047,13 +2108,13 @@ async def delete_employee(item_id: str, user=Depends(get_current_user)):
 
 
 @api_router.get("/cameras")
-async def list_cameras(user=Depends(get_current_user)):
+async def list_cameras(user=Depends(require_cctv)):
     docs = await db.cameras.find().sort("created_at", 1).to_list(500)
     return [doc_id(d) for d in docs]
 
 
 @api_router.post("/cameras")
-async def create_camera(body: CameraIn, user=Depends(get_current_user)):
+async def create_camera(body: CameraIn, user=Depends(require_cctv)):
     count = await db.cameras.count_documents({})
     doc = body.model_dump()
     doc["code"] = f"CAM-{count + 1:02d}"
@@ -2065,7 +2126,7 @@ async def create_camera(body: CameraIn, user=Depends(get_current_user)):
 
 
 @api_router.get("/cameras/{camera_id}/snapshot")
-async def camera_snapshot(camera_id: str, user=Depends(get_current_user)):
+async def camera_snapshot(camera_id: str, user=Depends(require_cctv)):
     try:
         oid = ObjectId(camera_id)
     except Exception:
@@ -2107,7 +2168,7 @@ async def camera_snapshot(camera_id: str, user=Depends(get_current_user)):
 
 
 @api_router.delete("/cameras/{item_id}")
-async def delete_camera(item_id: str, user=Depends(get_current_user)):
+async def delete_camera(item_id: str, user=Depends(require_cctv)):
     r = await db.cameras.delete_one({"_id": ObjectId(item_id)})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -2116,7 +2177,8 @@ async def delete_camera(item_id: str, user=Depends(get_current_user)):
 
 @api_router.get("/devices")
 async def list_devices(user=Depends(get_current_user)):
-    docs = await db.devices.find().sort("created_at", 1).to_list(500)
+    query = {} if effective_permissions(user)["cctv"] else {"type": {"$ne": "nvr"}}
+    docs = await db.devices.find(query).sort("created_at", 1).to_list(500)
     return [doc_id(d) for d in docs]
 
 
@@ -2124,6 +2186,8 @@ async def list_devices(user=Depends(get_current_user)):
 async def create_device(body: DeviceIn, user=Depends(get_current_user)):
     if body.type not in {"gateway", "nvr", "face", "card"}:
         raise HTTPException(status_code=400, detail="Device type must be gateway, nvr, face or card")
+    if body.type == "nvr":
+        ensure_permission(user, "cctv")
     doc = body.model_dump()
     doc["status"] = "online"
     doc["created_at"] = datetime.now(timezone.utc)
@@ -2134,6 +2198,12 @@ async def create_device(body: DeviceIn, user=Depends(get_current_user)):
 
 @api_router.delete("/devices/{item_id}")
 async def delete_device(item_id: str, user=Depends(get_current_user)):
+    try:
+        existing = await db.devices.find_one({"_id": ObjectId(item_id)})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid device ID")
+    if existing and existing.get("type") == "nvr":
+        ensure_permission(user, "cctv")
     r = await db.devices.delete_one({"_id": ObjectId(item_id)})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Device not found")
@@ -2142,7 +2212,7 @@ async def delete_device(item_id: str, user=Depends(get_current_user)):
 
 
 @api_router.post("/devices/{item_id}/sync-nvr-channels")
-async def sync_nvr_channels(item_id: str, user=Depends(get_current_user)):
+async def sync_nvr_channels(item_id: str, user=Depends(require_cctv)):
     try:
         oid = ObjectId(item_id)
     except Exception:
@@ -2595,6 +2665,11 @@ async def start_single_emergency_test(body: SingleDoorTestStart, request: Reques
     if not door:
         raise HTTPException(status_code=404, detail="Choose one existing emergency-group door")
     validate_emergency_targets([door])
+    physical_device = await db.devices.find_one({"gatewayDeviceId": door["gatewayDeviceId"]}, {"type": 1})
+    if physical_device and physical_device.get("type") == "face":
+        raise HTTPException(status_code=409,
+            detail="Facial terminal returned only a momentary pulse during on-site testing. "
+                   "Sustained release is NOT verified; use approved independent egress hardware.")
     if "kerma-monterrey" not in gateway_connections:
         raise HTTPException(status_code=503, detail="Local Gateway offline: no physical test attempted")
     from pymongo.errors import DuplicateKeyError
@@ -2746,6 +2821,13 @@ async def activate_emergency_release(body: EmergencyReleaseConfirmation, request
         raise HTTPException(status_code=423, detail="Emergency release not armed; onsite safety commissioning is required")
     doors = await emergency_egress_doors()
     validate_emergency_targets(doors)
+    facial_ids = {d.get("gatewayDeviceId") async for d in db.devices.find(
+        {"type": "face"}, {"gatewayDeviceId": 1}
+    )}
+    if any(d.get("gatewayDeviceId") in facial_ids for d in doors):
+        raise HTTPException(status_code=409,
+            detail="Facial terminals only pulse. Sustained exit release requires on-site certification; "
+                   "remove unverified facial outputs from the emergency group before commissioning.")
 
     # Atomic cross-process mutex: prevent overlapping commands from multiple browsers.
     from pymongo.errors import DuplicateKeyError
