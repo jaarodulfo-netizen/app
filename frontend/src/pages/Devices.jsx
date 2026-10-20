@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Network, HardDrive, ScanFace, Nfc, RefreshCw, Plus, Trash2, X, Loader2, Cpu } from 'lucide-react';
+import { Network, HardDrive, ScanFace, Nfc, RefreshCw, Plus, Trash2, X, Loader2, Cpu, Clock3 } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -221,6 +222,9 @@ export default function Devices() {
         <div className="space-y-8" data-testid="devices-page">
             <PageHeader eyebrow={devices === null ? 'HARDWARE MESH // SYNCING…' : `HARDWARE MESH // ${list.length} NODES`} title="Access Devices">
                 <div className="flex items-center gap-3">
+                    <Link to="/attendance" className="inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-400/10 px-4 py-2.5 text-xs font-bold text-amber-200 hover:bg-amber-400/15">
+                        <Clock3 size={15} /> ATTENDANCE REPORTS
+                    </Link>
                     {list.length > 0 && (
                         <span className="mono text-[10px] tracking-widest text-emerald-300 border border-emerald-400/30 bg-emerald-400/10 rounded-full px-4 py-2">
                             {online} ONLINE · {list.length - online} OFFLINE

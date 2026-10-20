@@ -855,6 +855,8 @@ async def hls_file(camera_id: str, file_path: str, token: str = ""):
 
 # --- Attendance / payroll (one dedicated facial terminal) ---
 
+from attendance_punch import classify_attendance_punch, measure_attendance
+
 ATTENDANCE_TZ = ZoneInfo("America/Monterrey")
 ATTENDANCE_SHIFTS = {
     "A": {"start": time(7, 0), "hours": 8},
@@ -950,17 +952,24 @@ async def _attendance_sessions(start_day, end_day, device):
             "$gte": query_local_start.astimezone(timezone.utc),
             "$lt": query_local_end.astimezone(timezone.utc),
         },
-        "result": "granted",
         "$or": attendance_device_match(device),
     }
     attendance_docs = await db.attendance_events.find(query).sort("time", 1).to_list(20000)
     legacy_docs = await db.events.find(query).sort("time", 1).to_list(20000)
     docs_by_key = {}
     for doc in attendance_docs + legacy_docs:
+        result = str(doc.get("result") or "").lower()
+        raw_punch = classify_attendance_punch(doc.get("raw_gateway_event"))
+        # Some attendance firmwares report a valid explicit IN/OUT/break
+        # as a status event. Do not count denied or alarm records as punches.
+        if result != "granted" and not (result == "status" and raw_punch):
+            continue
         key = str(doc.get("dedupeKey") or doc.get("_id"))
         docs_by_key[key] = doc
     docs = sorted(docs_by_key.values(), key=lambda d: d.get("time") or datetime.min.replace(tzinfo=timezone.utc))
 
+    # Prefer the original person/card identity over name: two employees may
+    # share a display name. Numeric Hikvision person IDs can lose leading zeroes.
     by_person = {}
     for e in docs:
         person = str(e.get("person") or "").strip()
@@ -969,16 +978,32 @@ async def _attendance_sessions(start_day, end_day, device):
         local_t = _local_dt(e.get("time"))
         if not local_t:
             continue
-        by_person.setdefault(person, []).append({
+        person_id = str(e.get("personId") or "").strip()
+        card_no = str(e.get("cardNo") or "").strip()
+        if person_id and person_id.isascii() and person_id.isdecimal():
+            identity = ("person_id", str(int(person_id)))
+        elif person_id:
+            identity = ("person_id", person_id)
+        elif card_no and card_no.isascii() and card_no.isdecimal():
+            identity = ("person_id", str(int(card_no)))
+        elif card_no:
+            identity = ("card", card_no)
+        else:
+            identity = ("name", person.casefold())
+        bucket = by_person.setdefault(identity, {"person": person, "scans": []})
+        bucket["scans"].append({
             "time": local_t,
             "method": e.get("method"),
             "detail": e.get("detail"),
-            "cardNo": e.get("cardNo"),
+            "cardNo": card_no,
+            "personId": person_id,
+            "punch": classify_attendance_punch(e.get("raw_gateway_event")),
         })
 
     sessions = []
-    for person, scans in by_person.items():
-        scans.sort(key=lambda x: x["time"])
+    for bucket in by_person.values():
+        person = bucket["person"]
+        scans = sorted(bucket["scans"], key=lambda x: x["time"])
         i = 0
         while i < len(scans):
             first = scans[i]["time"]
@@ -991,28 +1016,42 @@ async def _attendance_sessions(start_day, end_day, device):
                 session_scans.append(scans[j])
                 j += 1
 
-            last = session_scans[-1]["time"]
-            worked, regular, overtime = _duration_parts(first, last)
+            measure = measure_attendance(session_scans)
+            worked = measure["worked_seconds"]
+            regular = min(worked, 8 * 3600)
+            overtime = max(0, worked - regular)
             shift_day = scheduled_start.date()
 
             if start_day <= shift_day <= end_day:
                 sessions.append({
                     "person": person,
+                    "person_id": scans[i].get("personId") or None,
+                    "card_no": scans[i].get("cardNo") or None,
                     "shift": shift,
                     "shift_date": shift_day.isoformat(),
                     "scheduled_start": scheduled_start.isoformat(),
                     "scheduled_end": scheduled_end.isoformat(),
-                    "first_in": first.isoformat(),
-                    "last_out": last.isoformat() if len(session_scans) > 1 else None,
+                    "first_in": measure["first_in"].isoformat() if measure["first_in"] else None,
+                    "last_out": measure["last_out"].isoformat() if measure["last_out"] else None,
                     "events": len(session_scans),
                     "worked_seconds": worked,
                     "regular_seconds": regular,
                     "overtime_seconds": overtime,
+                    "break_seconds": measure["break_seconds"],
+                    "break_count": measure["break_count"],
                     "worked": _seconds_hhmm(worked),
                     "regular": _seconds_hhmm(regular),
                     "overtime": _seconds_hhmm(overtime),
-                    "complete": len(session_scans) > 1 and worked >= 8 * 3600,
-                    "status": "complete" if len(session_scans) > 1 and worked >= 8 * 3600 else ("incomplete" if len(session_scans) > 1 else "open"),
+                    "breaks": _seconds_hhmm(measure["break_seconds"]),
+                    "punches_confirmed": measure["punches_confirmed"],
+                    "estimated": measure["estimated"],
+                    "warning": measure["warning"],
+                    "punches": [
+                        {"time": s["time"].isoformat(), "type": s.get("punch") or "unclassified",
+                         "method": s.get("method")} for s in session_scans
+                    ],
+                    "complete": measure["punches_confirmed"],
+                    "status": measure["status"],
                 })
 
             i = max(j, i + 1)
@@ -1025,6 +1064,9 @@ def _attendance_summary(rows):
     return {
         "present": len(rows),
         "events": sum(int(r.get("events", 0)) for r in rows),
+        "break_seconds": sum(int(r.get("break_seconds", 0)) for r in rows),
+        "breaks": _seconds_hhmm(sum(int(r.get("break_seconds", 0)) for r in rows)),
+        "needs_review": sum(1 for r in rows if not r.get("punches_confirmed")),
         "worked_seconds": sum(int(r.get("worked_seconds", 0)) for r in rows),
         "regular_seconds": sum(int(r.get("regular_seconds", 0)) for r in rows),
         "overtime_seconds": sum(int(r.get("overtime_seconds", 0)) for r in rows),
@@ -2954,7 +2996,7 @@ KERMA_DEVICE_SEED = [
     {"type": "face", "name": "Cleaning Storage", "gatewayDeviceId": "cleaning-storage", "doors": [1], "ip": "192.168.1.169", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
     {"type": "face", "name": "Roof Stairs", "gatewayDeviceId": "roof-stairs", "doors": [1], "ip": "192.168.1.124", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
     {"type": "face", "name": "Technicians Inventory", "gatewayDeviceId": "technicians-inventory", "doors": [1], "ip": "192.168.3.208", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Attendance Main", "gatewayDeviceId": "attendance-main", "doors": [1], "ip": "192.168.0.77", "fw": "", "detail": "Dedicated attendance facial terminal", "signal": 95},
+    {"type": "face", "name": "Attendance Main", "gatewayDeviceId": "attendance-main", "doors": [1], "ip": "192.168.3.219", "fw": "", "detail": "Dedicated attendance facial terminal", "signal": 95},
     {"type": "card", "name": "1st Floor AC", "gatewayDeviceId": "1st-floor-ac", "doors": [1,2,3,4], "ip": "192.168.3.111", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
     {"type": "card", "name": "2nd Floor AC", "gatewayDeviceId": "2nd-floor-ac", "doors": [1,2,3,4], "ip": "192.168.3.112", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
     {"type": "card", "name": "Break Room", "gatewayDeviceId": "break-room", "doors": [1,2,3,4], "ip": "192.168.3.113", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
