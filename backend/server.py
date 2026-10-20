@@ -2134,6 +2134,131 @@ async def create_camera(body: CameraIn, user=Depends(require_cctv)):
     return doc_id(doc)
 
 
+# HD continuous HLS through the existing authenticated outgoing Gateway tunnel.
+# Private NVR RTSP credentials remain on the Windows Gateway. The web backend
+# never connects to a 192.168.x.x camera or stores video recordings.
+class LiveQuality(BaseModel):
+    quality: str = "sub"
+
+
+async def _camera_hls_target(camera_id: str) -> dict:
+    if not ObjectId.is_valid(camera_id):
+        raise HTTPException(status_code=400, detail="Invalid camera ID")
+    camera = await db.cameras.find_one({"_id": ObjectId(camera_id)})
+    if not camera:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    if not camera.get("nvr") or not camera.get("nvrIp") or not camera.get("channelNo"):
+        raise HTTPException(status_code=409, detail="Camera is not linked to an NVR channel")
+    try:
+        nvr_id = ObjectId(str(camera["nvr"]))
+    except Exception:
+        raise HTTPException(status_code=409, detail="Invalid linked NVR reference")
+    nvr = await db.devices.find_one({"_id": nvr_id, "type": "nvr"})
+    if not nvr or nvr.get("ip") != camera.get("nvrIp"):
+        raise HTTPException(status_code=409, detail="NVR inventory mismatch; resync channels")
+    ch = int(camera["channelNo"])
+    if ch < 1 or ch > 256:
+        raise HTTPException(status_code=400, detail="Invalid NVR channel")
+    return {"nvrId": str(nvr["_id"]), "nvrIp": nvr["ip"], "channelNo": ch}
+
+
+async def _authorized_hls_viewer(camera_id: str, token: str) -> None:
+    user_id = check_stream_token(camera_id, token) if token else None
+    if not user_id:
+        raise HTTPException(status_code=403, detail="Invalid or expired video token")
+    viewer = await db.users.find_one({"_id": ObjectId(user_id)})
+    if not viewer or not viewer.get("is_active", True) or not effective_permissions(viewer)["cctv"]:
+        raise HTTPException(status_code=403, detail="CCTV permission revoked")
+
+
+def _valid_hls_quality(value: str) -> str:
+    if value not in {"sub", "main"}:
+        raise HTTPException(status_code=400, detail="Quality must be sub or main")
+    return value
+
+
+async def _gateway_hls_file(camera_id: str, quality: str, file: str) -> bytes:
+    target = await _camera_hls_target(camera_id)
+    try:
+        result = await send_gateway_command({
+            "kind": "nvr.hls.fetch",
+            "nvrId": target["nvrId"],
+            "channelNo": target["channelNo"],
+            "quality": quality,
+            "file": file,
+        })
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Gateway HLS unavailable or segment expired") from exc
+    if not isinstance(result, dict) or result.get("file") != file or not isinstance(result.get("base64"), str):
+        raise HTTPException(status_code=502, detail="Invalid HLS Gateway response")
+    encoded = result["base64"]
+    if len(encoded) > 6_100_000:
+        raise HTTPException(status_code=502, detail="Gateway video segment too large")
+    try:
+        blob = base64.b64decode(encoded, validate=True)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Gateway video segment corrupt")
+    if not blob:
+        raise HTTPException(status_code=502, detail="Empty Gateway video response")
+    return blob
+
+
+@api_router.post("/cameras/{camera_id}/live/start")
+async def start_live_camera(camera_id: str, body: LiveQuality, user=Depends(require_cctv)):
+    quality = _valid_hls_quality(body.quality)
+    target = await _camera_hls_target(camera_id)
+    result = await send_gateway_command({
+        "kind": "nvr.hls.start",
+        "nvr": {"id": target["nvrId"], "ip": target["nvrIp"]},
+        "channelNo": target["channelNo"],
+        "quality": quality,
+    })
+    if not isinstance(result, dict) or result.get("ready") is not True:
+        raise HTTPException(status_code=503, detail="Windows Gateway video encoder not ready")
+    expiry = int(datetime.now(timezone.utc).timestamp() + 3600)
+    token = make_stream_token(camera_id, expiry, str(user["_id"]))
+    return {
+        "ok": True, "quality": quality, "transport": "hls",
+        "resolutionProfile": "up-to-1080p" if quality == "main" else "up-to-540p",
+        "playlistUrl": f"/api/cameras/{camera_id}/live/playlist.m3u8?quality={quality}&token={token}",
+        "warning": "Stream is live; quality and latency depend on NVR, FFmpeg and uplink",
+    }
+
+
+@api_router.get("/cameras/{camera_id}/live/playlist.m3u8")
+async def live_camera_playlist(camera_id: str, quality: str = "sub", token: str = ""):
+    await _authorized_hls_viewer(camera_id, token)
+    quality = _valid_hls_quality(quality)
+    raw = await _gateway_hls_file(camera_id, quality, "index.m3u8")
+    if len(raw) > 150_000 or not raw.startswith(b"#EXTM3U"):
+        raise HTTPException(status_code=502, detail="Malformed HLS playlist")
+    lines = raw.decode("utf-8", errors="strict").splitlines()
+    rewritten = []
+    for line in lines:
+        name = line.strip()
+        if name and not name.startswith("#"):
+            if not re.fullmatch(r"seg-[0-9]{6}\\.ts", name):
+                raise HTTPException(status_code=502, detail="Unexpected video segment in playlist")
+            rewritten.append(f"segments/{name}?quality={quality}&token={token}")
+        else:
+            rewritten.append(line)
+    return Response(
+        content="\\n".join(rewritten) + "\\n",
+        media_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-store", "Access-Control-Allow-Origin": "*"},
+    )
+
+
+@api_router.get("/cameras/{camera_id}/live/segments/{file_name}")
+async def live_camera_segment(camera_id: str, file_name: str, quality: str = "sub", token: str = ""):
+    await _authorized_hls_viewer(camera_id, token)
+    quality = _valid_hls_quality(quality)
+    if not re.fullmatch(r"seg-[0-9]{6}\\.ts", file_name):
+        raise HTTPException(status_code=400, detail="Invalid segment name")
+    raw = await _gateway_hls_file(camera_id, quality, file_name)
+    return Response(content=raw, media_type="video/mp2t", headers={"Cache-Control": "no-store"})
+
+
 @api_router.get("/cameras/{camera_id}/snapshot")
 async def camera_snapshot(camera_id: str, user=Depends(require_cctv)):
     try:
