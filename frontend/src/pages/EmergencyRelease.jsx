@@ -19,6 +19,8 @@ export default function EmergencyRelease() {
     const [busy, setBusy] = useState(false);
     const [editing, setEditing] = useState(null);
     const [modal, setModal] = useState(false);
+    const [bulkMode, setBulkMode] = useState(null);
+    const [bulkAccepted, setBulkAccepted] = useState(false);
     const [phrase, setPhrase] = useState('');
     const [accepted, setAccepted] = useState(false);
     const [lastResult, setLastResult] = useState(null);
@@ -46,12 +48,14 @@ export default function EmergencyRelease() {
 
     const doors = status?.doors || [];
     const selected = doors.filter((d) => d.eligible);
+    const mapped = doors.filter((d) => d.linked);
+    const canConfigureGroup = Boolean(status && !status.armed && !busy && !editing && !loading);
     const invalid = selected.some((d) => !d.linked);
     const canActivate = Boolean(status?.armed && selected.length && !invalid && !busy);
     const canSimulate = Boolean(selected.length && !invalid && !busy);
 
     const configure = async (door, eligible) => {
-        if (busy || editing) return;
+        if (busy || editing || status?.armed) return;
         setEditing(door.id);
         try {
             await api.put(`/emergency/doors/${door.id}`, { eligible });
@@ -61,6 +65,31 @@ export default function EmergencyRelease() {
             toast.error('No se pudo actualizar la configuración', { description: responseError(err) });
         } finally {
             setEditing(null);
+        }
+    };
+
+    // Preconfigure the ENTIRE group with one server request. Never called
+    // during an emergency and never sends an access-controller command.
+    const configureAll = async () => {
+        if (!canConfigureGroup || !bulkMode || !bulkAccepted) return;
+        const mode = bulkMode;
+        setBulkMode(null);
+        setBulkAccepted(false);
+        setBusy(true);
+        try {
+            const { data } = await api.put('/emergency/doors/bulk', {
+                mode, confirmation: 'CONFIGURAR',
+            });
+            toast.success(mode === 'clear_all'
+                ? 'Grupo de evacuación limpiado'
+                : `Grupo guardado: ${data.selectedCount} puertas vinculadas`, {
+                description: 'Solo se guardó la configuración. No se enviaron órdenes a las puertas.',
+            });
+            await refresh();
+        } catch (err) {
+            toast.error('No se pudo configurar el grupo', { description: responseError(err) });
+        } finally {
+            setBusy(false);
         }
     };
 
@@ -136,7 +165,7 @@ export default function EmergencyRelease() {
                         <AlertOctagon size={19} />
                         <span className="mono text-xs font-bold tracking-widest">ACTIVACIÓN DE EMERGENCIA</span>
                     </div>
-                    <p className="mt-3 text-sm text-slate-300">Activa únicamente las puertas seleccionadas para evacuación. La aplicación no controla el sistema cableado de alarma contra incendios.</p>
+                    <p className="mt-3 text-sm text-slate-300">Libera el grupo de salidas preparado con anticipación. <strong>No necesitas elegir las puertas durante la emergencia.</strong> La aplicación no sustituye el sistema cableado de alarma contra incendios.</p>
                     <button
                         data-testid="emergency-activate-button"
                         type="button"
@@ -146,7 +175,7 @@ export default function EmergencyRelease() {
                     >
                         {busy ? <Loader2 className="animate-spin" size={32} /> : <Siren size={37} />}
                         <span className="text-lg font-black tracking-widest sm:text-xl">LIBERAR PUERTAS</span>
-                        <span className="text-xs font-semibold">EMERGENCY RELEASE</span>
+                        <span className="text-xs font-semibold">EMERGENCY RELEASE · {selected.length} SALIDAS CONFIGURADAS</span>
                     </button>
                     <p className="mt-3 text-center text-xs text-slate-400">
                         {!status?.armed ? 'Deshabilitado hasta autorizar la puesta en servicio física.' : selected.length === 0 ? 'Seleccione las salidas de evacuación.' : 'Se requiere confirmación expresa para activar.'}
@@ -209,10 +238,36 @@ export default function EmergencyRelease() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
                         <h2 className="flex items-center gap-2 text-lg font-semibold text-white"><DoorOpen size={20} className="text-sky-400" /> Salidas de emergencia</h2>
-                        <p className="mt-1 text-xs text-slate-400">Seleccione únicamente puertas habilitadas para evacuación y verificadas en sitio.</p>
+                        <p className="mt-1 text-xs text-slate-400">Configura y guarda las salidas antes de una emergencia. En el momento del incidente, el botón rojo utiliza este grupo automáticamente.</p>
                     </div>
-                    <span className="mono text-xs text-slate-500">{selected.length} / {doors.length} seleccionadas</span>
+                    <span className="mono text-xs text-slate-500">{selected.length} seleccionadas / {mapped.length} vinculadas</span>
                 </div>
+                <div className="mt-5 flex flex-wrap items-center gap-3">
+                    <button
+                        type="button"
+                        data-testid="emergency-select-all"
+                        disabled={!canConfigureGroup || mapped.length === 0 || mapped.length > 64 || selected.length === mapped.length}
+                        onClick={() => { setBulkAccepted(false); setBulkMode('select_all_mapped'); }}
+                        className="flex items-center gap-2 rounded-xl border border-sky-400/40 bg-sky-500/10 px-4 py-2.5 text-xs font-bold text-sky-200 hover:bg-sky-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                        <CheckCircle2 size={16} /> SELECCIONAR TODAS ({mapped.length})
+                    </button>
+                    <button
+                        type="button"
+                        data-testid="emergency-clear-all"
+                        disabled={!canConfigureGroup || selected.length === 0}
+                        onClick={() => { setBulkAccepted(false); setBulkMode('clear_all'); }}
+                        className="rounded-xl border border-white/15 px-4 py-2.5 text-xs font-semibold text-slate-300 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
+                    >DESELECCIONAR TODAS</button>
+                    <span className="text-xs text-slate-500">
+                        {status?.armed
+                            ? 'Para modificar el grupo, primero deshabilita el modo de apertura real.'
+                            : 'La selección se guarda en el servidor y no ejecuta apertura física.'}
+                    </span>
+                </div>
+                <p className="mt-3 text-xs text-amber-300">
+                    Seleccionar todas incluye todas las puertas conectadas a controladores, no necesariamente salidas de evacuación certificadas. Revisa el grupo con EHS antes de habilitar apertura real.
+                </p>
                 {loading ? <p className="mt-5 text-sm text-slate-400">Cargando puertas…</p> : (
                     <div className="mt-5 grid gap-2 md:grid-cols-2">
                         {doors.map((door) => (
@@ -221,7 +276,7 @@ export default function EmergencyRelease() {
                                     type="checkbox"
                                     className="mt-1 h-4 w-4 accent-rose-500"
                                     checked={Boolean(door.eligible)}
-                                    disabled={busy || Boolean(editing) || !door.linked}
+                                    disabled={busy || Boolean(editing) || !door.linked || status?.armed}
                                     onChange={(e) => configure(door, e.target.checked)}
                                     aria-label={`Incluir ${door.name} en liberación de emergencia`}
                                 />
@@ -253,6 +308,38 @@ export default function EmergencyRelease() {
                     {!status?.recent?.length && <p className="text-sm text-slate-500">No hay activaciones registradas.</p>}
                 </div>
             </section>
+
+            {bulkMode && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4" role="presentation">
+                    <div className="w-full max-w-lg rounded-2xl border-2 border-amber-500/40 bg-[#15151b] p-6 shadow-2xl" role="dialog" aria-modal="true" aria-label="Confirmar configuración de grupo de emergencia">
+                        <h2 className="flex items-center gap-2 text-xl font-bold text-white">
+                            <ClipboardCheck size={23} className="text-amber-300" />
+                            {bulkMode === 'select_all_mapped' ? 'Preparar todas las puertas' : 'Vaciar grupo de emergencia'}
+                        </h2>
+                        <p className="mt-4 text-sm leading-relaxed text-slate-200">
+                            {bulkMode === 'select_all_mapped'
+                                ? `Se incluirán ${mapped.length} puertas vinculadas a controladores físicos. Esto configura el grupo para futuras emergencias; NO abrirá ninguna puerta ahora.`
+                                : `Se eliminarán las ${selected.length} puertas seleccionadas del grupo. El botón rojo permanecerá deshabilitado si no queda ninguna.`}
+                        </p>
+                        {bulkMode === 'select_all_mapped' && (
+                            <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-200">
+                                Algunas puertas pueden no ser rutas de evacuación aprobadas. EHS debe revisar la lista y retirar las no autorizadas antes de habilitar una apertura real.
+                            </p>
+                        )}
+                        <label className="mt-5 flex items-start gap-3 text-sm text-slate-200">
+                            <input type="checkbox" className="mt-1 accent-amber-400" checked={bulkAccepted} onChange={(e) => setBulkAccepted(e.target.checked)} />
+                            Confirmo este cambio de configuración anticipada, sin activar las puertas.
+                        </label>
+                        <div className="mt-6 grid grid-cols-2 gap-3">
+                            <button type="button" onClick={() => { setBulkMode(null); setBulkAccepted(false); }} className="rounded-xl border border-white/20 px-3 py-3 text-sm font-semibold text-slate-200">CANCELAR</button>
+                            <button type="button" data-testid="confirm-emergency-bulk" disabled={!bulkAccepted || busy} onClick={configureAll}
+                                className="rounded-xl bg-sky-600 px-3 py-3 text-sm font-bold text-white hover:bg-sky-500 disabled:opacity-40">
+                                GUARDAR GRUPO
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {modal && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4" role="presentation">
