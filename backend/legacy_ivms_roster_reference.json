@@ -1,0 +1,310 @@
+{
+  "source": "Historic iVMS-4200 roster (previously embedded in backend/server.py)",
+  "snapshot": true,
+  "description": "Read-only historical reference. NOT a live Hikvision inventory and NEVER used for automatic employee creation.",
+  "employees": [
+    {
+      "personId": "00000001",
+      "name": "David Gutierrez",
+      "cardNos": [
+        "0008512187"
+      ]
+    },
+    {
+      "personId": "00000002",
+      "name": "Juan Alvarez",
+      "cardNos": [
+        "0008512197",
+        "0008512175",
+        "0008512223",
+        "0008512259"
+      ]
+    },
+    {
+      "personId": "00000004",
+      "name": "Francisco Vilchez",
+      "cardNos": [
+        "0008512170",
+        "0008512185"
+      ]
+    },
+    {
+      "personId": "00000005",
+      "name": "Hector Vargas",
+      "cardNos": [
+        "0008512188"
+      ]
+    },
+    {
+      "personId": "00000007",
+      "name": "Roberto Infante",
+      "cardNos": [
+        "0008512203"
+      ]
+    },
+    {
+      "personId": "00000008",
+      "name": "Sergio Zurita",
+      "cardNos": [
+        "0008512173"
+      ]
+    },
+    {
+      "personId": "00000009",
+      "name": "Andrea Regalado",
+      "cardNos": [
+        "0008512191"
+      ]
+    },
+    {
+      "personId": "00000011",
+      "name": "Carson Hubbard",
+      "cardNos": [
+        "0008512234"
+      ]
+    },
+    {
+      "personId": "00000013",
+      "name": "Diego Salas",
+      "cardNos": [
+        "0008512213"
+      ]
+    },
+    {
+      "personId": "00000014",
+      "name": "Edwin Arceo",
+      "cardNos": [
+        "0008512190"
+      ]
+    },
+    {
+      "personId": "00000015",
+      "name": "Edgar Bazabilbazo",
+      "cardNos": [
+        "0008512198"
+      ]
+    },
+    {
+      "personId": "00000016",
+      "name": "Claudia Chichizola",
+      "cardNos": [
+        "0008512192"
+      ]
+    },
+    {
+      "personId": "00000017",
+      "name": "Valeria Gray",
+      "cardNos": [
+        "0008512169"
+      ]
+    },
+    {
+      "personId": "00000018",
+      "name": "Vanessa Rios",
+      "cardNos": [
+        "0008512167"
+      ]
+    },
+    {
+      "personId": "00000019",
+      "name": "Technicians",
+      "cardNos": [
+        "0008512206"
+      ]
+    },
+    {
+      "personId": "00000020",
+      "name": "Carolina Shepard",
+      "cardNos": [
+        "0008512205"
+      ]
+    },
+    {
+      "personId": "00000021",
+      "name": "Barbara Villareal",
+      "cardNos": [
+        "0008512164"
+      ]
+    },
+    {
+      "personId": "00000024",
+      "name": "Regina Castillo",
+      "cardNos": [
+        "0008512186"
+      ]
+    },
+    {
+      "personId": "00000025",
+      "name": "Elias Hernandez",
+      "cardNos": [
+        "0008512195"
+      ]
+    },
+    {
+      "personId": "00000027",
+      "name": "Angela Zambrano",
+      "cardNos": [
+        "0008512193"
+      ]
+    },
+    {
+      "personId": "00000030",
+      "name": "WANNA CLEANING",
+      "cardNos": [
+        "0008512208"
+      ]
+    },
+    {
+      "personId": "00000031",
+      "name": "supervisor access",
+      "cardNos": [
+        "0008512162"
+      ]
+    },
+    {
+      "personId": "00000032",
+      "name": "Eduardo Lopez",
+      "cardNos": [
+        "0008512201"
+      ]
+    },
+    {
+      "personId": "00000033",
+      "name": "Alfredo Cardenas",
+      "cardNos": [
+        "0008512202"
+      ]
+    },
+    {
+      "personId": "00000034",
+      "name": "Alfredo Infante",
+      "cardNos": [
+        "0008512204"
+      ]
+    },
+    {
+      "personId": "00000035",
+      "name": "Patricio Garza",
+      "cardNos": [
+        "0008512207"
+      ]
+    },
+    {
+      "personId": "00000036",
+      "name": "Security",
+      "cardNos": [
+        "0008512209"
+      ]
+    },
+    {
+      "personId": "00000037",
+      "name": "Jorge Sanchez",
+      "cardNos": [
+        "0008512210"
+      ]
+    },
+    {
+      "personId": "00000038",
+      "name": "Norma Luna",
+      "cardNos": [
+        "0008512196"
+      ]
+    },
+    {
+      "personId": "00000039",
+      "name": "Alia Contreras",
+      "cardNos": []
+    },
+    {
+      "personId": "00000040",
+      "name": "Liam Tasiello",
+      "cardNos": [
+        "0008512212"
+      ]
+    },
+    {
+      "personId": "00000041",
+      "name": "Karina Tamez",
+      "cardNos": [
+        "0008512214"
+      ]
+    },
+    {
+      "personId": "00000042",
+      "name": "Fernando Enriquez",
+      "cardNos": [
+        "0008512215"
+      ]
+    },
+    {
+      "personId": "00000044",
+      "name": "ATHZIRI GUTIERREZ",
+      "cardNos": [
+        "0008512217"
+      ]
+    },
+    {
+      "personId": "00000045",
+      "name": "Samuel Grajeda",
+      "cardNos": [
+        "0008512225"
+      ]
+    },
+    {
+      "personId": "00000046",
+      "name": "Francisco Bernal",
+      "cardNos": [
+        "0008512219"
+      ]
+    },
+    {
+      "personId": "00000047",
+      "name": "Debhani Gonzalez",
+      "cardNos": [
+        "0008512189"
+      ]
+    },
+    {
+      "personId": "00000048",
+      "name": "Zara Landa",
+      "cardNos": [
+        "0008512220"
+      ]
+    },
+    {
+      "personId": "00000049",
+      "name": "Yahir Gracia",
+      "cardNos": [
+        "0008512221"
+      ]
+    },
+    {
+      "personId": "00000050",
+      "name": "Paulina Arreola",
+      "cardNos": [
+        "0008512222"
+      ]
+    },
+    {
+      "personId": "00000051",
+      "name": "Gerardo Cerda",
+      "cardNos": [
+        "0008512227"
+      ]
+    },
+    {
+      "personId": "00000052",
+      "name": "David Orta",
+      "cardNos": [
+        "0008512226"
+      ]
+    },
+    {
+      "personId": "00000053",
+      "name": "Jesus Martinez",
+      "cardNos": [
+        "0008512224"
+      ]
+    }
+  ]
+}
