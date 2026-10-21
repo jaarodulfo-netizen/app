@@ -2903,12 +2903,33 @@ async def start_single_emergency_test(body: SingleDoorTestStart, request: Reques
         raise HTTPException(status_code=404, detail="Choose one existing emergency-group door")
     validate_emergency_targets([door])
     physical_device = await db.devices.find_one({"gatewayDeviceId": door["gatewayDeviceId"]}, {"type": 1})
-    if physical_device and physical_device.get("type") == "face":
-        raise HTTPException(status_code=409,
-            detail="Facial terminal returned only a momentary pulse during on-site testing. "
-                   "Sustained release is NOT verified; use approved independent egress hardware.")
     if "kerma-monterrey" not in gateway_connections:
         raise HTTPException(status_code=503, detail="Local Gateway offline: no physical test attempted")
+    if physical_device and physical_device.get("type") == "face":
+        # Commission only the explicitly inspected facial / maglock. This is
+        # an isolated Commander-supervised test, NOT a group release. Every
+        # other facial remains blocked pending its own onsite certification.
+        if door["gatewayDeviceId"] != "vip-exit" or door["doorNo"] != 1:
+            raise HTTPException(status_code=409,
+                detail="Facial sustained-release test is limited to VIP Exit; "
+                       "other facial outputs are not commissioned.")
+        try:
+            capabilities = await send_gateway_command({
+                "kind": "device.capabilities", "deviceId": "vip-exit",
+            })
+            remote = ((capabilities or {}).get("doorControl") or {}).get("RemoteControlDoor") or {}
+            cmds = remote.get("cmd") or {}
+            advertised = {cmd.strip() for cmd in str(cmds.get("@_opt") or "").split(",")}
+        except Exception as exc:
+            raise HTTPException(status_code=409,
+                detail="VIP Exit local ISAPI capabilities could not be confirmed; no door command sent.") from exc
+        if not {"alwaysOpen", "close"}.issubset(advertised):
+            raise HTTPException(status_code=409,
+                detail="VIP Exit did not advertise alwaysOpen and close on its current firmware; "
+                       "no door command sent.")
+        # The local Gateway must send an actual ISAPI alwaysOpen; a momentary
+        # cloud fallback is NOT acceptable. Physical relay inspection remains
+        # mandatory and the full emergency release still blocks all facials.
     from pymongo.errors import DuplicateKeyError
     from pymongo import ReturnDocument
     now = datetime.now(timezone.utc)
