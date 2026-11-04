@@ -531,7 +531,7 @@ async def update_officer_role(officer_id: str, body: OfficerRoleUpdate, user=Dep
 
         now = datetime.now(timezone.utc)
         result = await db.users.update_one(
-            {"_id": oid, "role": previous_role, "is_active": target.get("is_active", True)},
+            {"_id": oid, "role": previous_role, "is_active": {"$ne": False} if target.get("is_active", True) else False},
             {"$set": {"role": body.role, "roleUpdatedAt": now,
                       "roleUpdatedBy": user["email"]}},
         )
