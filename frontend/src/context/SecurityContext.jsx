@@ -138,8 +138,9 @@ export function SecurityProvider({ children }) {
     }, []);
 
     const deleteEmployee = useCallback(async (id) => {
-        await api.delete(`/employees/${id}`);
+        const { data } = await api.delete(`/employees/${id}`);
         setEmployees((prev) => (prev || []).filter((e) => e.id !== id));
+        return data;
     }, []);
 
     const refreshCameras = useCallback(async () => {
