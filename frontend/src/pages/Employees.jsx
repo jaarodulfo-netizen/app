@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ScanFace, X, Copy, UserPlus, Check, Sparkles, Trash2, Loader2, ImagePlus, Pencil, Save, Search, Filter, ShieldCheck, Plus, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
@@ -880,7 +880,7 @@ export default function Employees() {
     const [revocations, setRevocations] = useState([]);
     const [retryingRevocation, setRetryingRevocation] = useState(null);
 
-    const loadRevocations = async () => {
+    const loadRevocations = useCallback(async () => {
         if (user?.role !== 'commander') return;
         try {
             const { data } = await api.get('/employees/revocations');
@@ -888,11 +888,11 @@ export default function Employees() {
         } catch {
             toast.error('REVOCATION STATUS UNAVAILABLE');
         }
-    };
+    }, [user?.role]);
 
     useEffect(() => {
         if (user?.role === 'commander') loadRevocations();
-    }, [user?.role]);
+    }, [user?.role, loadRevocations]);
 
     const retryRevocation = async (id) => {
         setRetryingRevocation(id);
