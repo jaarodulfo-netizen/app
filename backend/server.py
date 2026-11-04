@@ -1987,6 +1987,33 @@ async def sync_employee_to_gateway(employee: dict):
     })
 
 
+async def validate_physical_access_rights(rights: dict) -> None:
+    """Cloud access levels may reference only real hardware-linked outputs,
+    never invented IDs or manually entered devices without a Gateway link.
+    """
+    for gateway_device_id, numbers in rights.items():
+        hardware = await db.devices.find_one({
+            "gatewayDeviceId": gateway_device_id,
+            "type": {"$in": ["card", "face"]},
+        }, {"_id": 1})
+        if not hardware:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Access device {gateway_device_id} is not linked to a physical controller",
+            )
+        for door_no in numbers:
+            physical = await db.doors.find_one({
+                "gatewayDeviceId": gateway_device_id,
+                "doorNo": door_no,
+                "hardwareLinked": True,
+            }, {"_id": 1})
+            if not physical:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Physical door {gateway_device_id}:{door_no} has not been registered by the Gateway",
+                )
+
+
 @api_router.get("/access-levels")
 async def list_access_levels(user=Depends(get_current_user)):
     docs = await db.access_levels.find().sort("name", 1).to_list(200)
@@ -1994,7 +2021,7 @@ async def list_access_levels(user=Depends(get_current_user)):
 
 
 @api_router.post("/access-levels")
-async def create_access_level(body: AccessLevelIn, user=Depends(get_current_user)):
+async def create_access_level(body: AccessLevelIn, user=Depends(require_enrollment)):
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Access level name is required")
@@ -2003,6 +2030,7 @@ async def create_access_level(body: AccessLevelIn, user=Depends(get_current_user
     rights = normalize_door_rights(body.doorRights)
     if not rights:
         raise HTTPException(status_code=400, detail="Select at least one physical access point")
+    await validate_physical_access_rights(rights)
     doc = {
         "name": name,
         "description": body.description.strip(),
@@ -2016,7 +2044,7 @@ async def create_access_level(body: AccessLevelIn, user=Depends(get_current_user
 
 
 @api_router.put("/access-levels/{item_id}")
-async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(get_current_user)):
+async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(require_enrollment)):
     try:
         oid = ObjectId(item_id)
     except Exception:
@@ -2025,6 +2053,20 @@ async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(ge
     rights = normalize_door_rights(body.doorRights)
     if not name or not rights:
         raise HTTPException(status_code=400, detail="Name and at least one access point are required")
+    await validate_physical_access_rights(rights)
+    current_level = await db.access_levels.find_one({"_id": oid})
+    if not current_level:
+        raise HTTPException(status_code=404, detail="Access level not found")
+    previous_rights = normalize_door_rights(current_level.get("doorRights"))
+    removed = any(not set(old_numbers).issubset(set(rights.get(device_id, [])))
+                  for device_id, old_numbers in previous_rights.items())
+    if removed and await db.employees.count_documents({
+        "accessLevelId": item_id, "is_active": {"$ne": False},
+    }):
+        raise HTTPException(
+            status_code=409,
+            detail="Removing rights from an assigned access level requires verified hardware revocation; do not silently keep old credentials on devices",
+        )
     await db.access_levels.update_one(
         {"_id": oid},
         {"$set": {
