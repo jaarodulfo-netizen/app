@@ -1432,6 +1432,9 @@ async def register_gateway_physical_devices(gateway_id: str, advertised: list) -
         if existing and existing.get("type") != dev_type:
             logger.error("Gateway device %s conflicts with registered device type", dev_id)
             continue
+        if existing and existing.get("gatewayId") not in (None, "", gateway_id):
+            logger.error("Gateway device %s is linked to another Gateway", dev_id)
+            continue
 
         if not existing:
             # Reconcile a manual registration only when the type and name are
@@ -1479,6 +1482,26 @@ async def register_gateway_physical_devices(gateway_id: str, advertised: list) -
                     "created_at": now,
                 })
         discovered += 1
+
+    # A formerly linked AC omitted from this authenticated inventory is not
+    # online/confirmed anymore. Keep its doors and access-level history, but
+    # mark it offline; never silently remove or grant rights.
+    missing_filter = {
+        "gatewayId": gateway_id,
+        "gatewayDeviceId": {"$nin": sorted(seen)},
+        "type": {"$in": ["card", "face"]},
+    }
+    await db.devices.update_many(missing_filter, {"$set": {
+        "gatewayOnline": False, "status": "offline",
+        "gatewayReason": "Missing from latest Gateway registration",
+    }})
+    await db.doors.update_many({
+        "gatewayDeviceId": {"$in": [
+            d["gatewayDeviceId"] async for d in db.devices.find(
+                missing_filter, {"gatewayDeviceId": 1}
+            ) if d.get("gatewayDeviceId")
+        ]},
+    }, {"$set": {"gatewayOnline": False, "hardwareStatus": "offline"}})
     return discovered
 
 
