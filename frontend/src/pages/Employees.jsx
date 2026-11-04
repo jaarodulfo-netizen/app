@@ -368,7 +368,7 @@ function EnrollModal({ open, onClose }) {
                 photoPath = data.path;
             }
             const selectedLevel = accessLevels.find((item) => item.id === accessLevelId);
-            await addEmployee({
+            const created = await addEmployee({
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 cardNo,
@@ -378,7 +378,7 @@ function EnrollModal({ open, onClose }) {
                 accessLevelId,
                 photoPath,
             });
-            toast.info('ENROLLMENT QUEUED', { description: `${name} saved. Check registration on every authorized device.` });
+            toast.info('ENROLLMENT QUEUED', { description: `${name.trim()}: Person ID ${created.personId} · card ${cardNo}. Verify registration on the authorized devices.` });
             reset();
             onClose();
         } catch (e) {
@@ -487,6 +487,7 @@ function EnrollModal({ open, onClose }) {
                                         />
 
                                     </div>
+                                    <p className="mt-2 text-[11px] text-sky-300">A unique Person ID will be generated automatically. This does not change the physical card number or overwrite existing users.</p>
                                 </div>
                             </div>
 
