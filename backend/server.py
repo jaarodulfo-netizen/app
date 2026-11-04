@@ -213,6 +213,16 @@ class DeviceIn(BaseModel):
     doors: List[int] = []
 
 
+class ControllerProvisionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    gatewayDeviceId: str
+    ip: str
+    doors: List[int]
+    credentialSet: str = "A"
+    sdkPort: int = 8000
+
+
 class DoorIn(BaseModel):
     name: str
     zone: str = "GENERAL"
@@ -2781,6 +2791,82 @@ async def list_devices(user=Depends(get_current_user)):
     query = {} if effective_permissions(user)["cctv"] else {"type": {"$ne": "nvr"}}
     docs = await db.devices.find(query).sort("created_at", 1).to_list(500)
     return [doc_id(d) for d in docs]
+
+
+@api_router.post("/devices/provision-controller")
+async def provision_access_controller(body: ControllerProvisionIn, user=Depends(require_commander)):
+    """Enroll one physical controller through the authenticated outbound
+    Gateway WebSocket. A cloud record is NOT proof of installation.
+    No passwords are accepted or stored in Railway.
+    """
+    from ipaddress import ip_address
+
+    name = body.name.strip()
+    device_id = body.gatewayDeviceId.strip()
+    if not 1 <= len(name) <= 120 or any(ord(ch) < 32 for ch in name):
+        raise HTTPException(status_code=400, detail="Controller name is invalid")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", device_id):
+        raise HTTPException(status_code=400, detail="Gateway Device ID must use letters, numbers, - or _")
+    try:
+        addr = ip_address(body.ip.strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid controller IP address")
+    if addr.version != 4 or not addr.is_private or addr.is_loopback or addr.is_link_local:
+        raise HTTPException(status_code=400, detail="Controller IP must be a private LAN IPv4 address")
+    if len(body.doors) not in range(1, 5) or any(type(n) is not int or n not in (1, 2, 3, 4) for n in body.doors):
+        raise HTTPException(status_code=400, detail="Select between 1 and 4 physical controller outputs")
+    doors = sorted(set(body.doors))
+    if len(doors) != len(body.doors):
+        raise HTTPException(status_code=400, detail="Duplicate door outputs are not allowed")
+    if body.credentialSet not in {"A", "B", "C", "D"}:
+        raise HTTPException(status_code=400, detail="Credential set must be A, B, C or D")
+    if not 1 <= body.sdkPort <= 65535:
+        raise HTTPException(status_code=400, detail="Invalid SDK port")
+    if await db.devices.find_one({"gatewayDeviceId": device_id}):
+        raise HTTPException(status_code=409, detail="Gateway Device ID already exists in cloud inventory")
+    if await db.devices.find_one({"type": "card", "ip": body.ip.strip(), "gatewayRegistered": True}):
+        raise HTTPException(status_code=409, detail="This AC IP is already registered")
+
+    audit = {
+        "actor": user["email"], "action": "controller_remote_provision",
+        "deviceId": device_id, "name": name,
+        "controllerIp": body.ip.strip(), "doors": doors,
+        "at": datetime.now(timezone.utc), "status": "requested",
+    }
+    inserted = await db.security_permission_audit.insert_one(audit)
+    try:
+        result = await send_gateway_command({
+            "kind": "device.provision",
+            "device": {
+                "id": device_id, "name": name, "ip": body.ip.strip(),
+                "role": "controller", "transport": "sdk",
+                "doors": doors, "credential": body.credentialSet,
+                "sdkPort": body.sdkPort,
+            },
+        })
+        if not isinstance(result, dict) or not result.get("configured") or result.get("id") != device_id:
+            raise HTTPException(status_code=502, detail="Gateway did not confirm local controller configuration")
+        await db.security_permission_audit.update_one(
+            {"_id": inserted.inserted_id},
+            {"$set": {"status": "gateway_confirmed", "completedAt": datetime.now(timezone.utc)}},
+        )
+        return {
+            "ok": True, "gatewayDeviceId": device_id, "name": name,
+            "doors": doors, "gatewayConfirmed": True,
+            "message": "Gateway confirmed configuration; verify physical connection and per-door access before assigning employees.",
+        }
+    except Exception as exc:
+        await db.security_permission_audit.update_one(
+            {"_id": inserted.inserted_id},
+            {"$set": {"status": "failed", "completedAt": datetime.now(timezone.utc),
+                      "failureType": type(exc).__name__}},
+        )
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=502,
+            detail="Gateway rejected remote provisioning or does not have the V4 remote controller capability installed",
+        ) from exc
 
 
 @api_router.post("/devices")
