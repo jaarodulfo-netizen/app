@@ -1753,7 +1753,7 @@ async def ensure_hikvision_employee_identity(employee: dict) -> dict:
                     break
             if not current_id:
                 raise HTTPException(status_code=503, detail="Unable to allocate a unique Person ID")
-        if not re.fullmatch(r"[0-9]{1,10}", current_id) or not 1 <= int(current_id) <= 2_147_483_647:
+        if not re.fullmatch(r"[0-9]{1,10}", current_id) or not 1 <= int(current_id) <= 4_294_967_295:
             raise HTTPException(status_code=409, detail="Invalid V2 hardware Person ID")
         if await person_id_conflicts(current_id, employee["_id"]):
             raise HTTPException(status_code=409, detail="Person ID already belongs to another record; no override allowed")
@@ -2095,12 +2095,22 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
                 normalized.append(card)
         updates["cardNos"] = normalized
         updates["cardNo"] = normalized[0] if normalized else ""
+        if normalized and await db.employees.find_one({
+            "_id": {"$ne": oid},
+            "$or": [{"cardNo": {"$in": normalized}}, {"cardNos": {"$in": normalized}}],
+        }, {"_id": 1}):
+            raise HTTPException(status_code=409, detail="One of these cards belongs to another employee")
     elif "cardNo" in updates:
         card = str(updates["cardNo"]).strip()
         if card and (not card.isdigit() or len(card) != 10):
             raise HTTPException(status_code=400, detail="Card number must be exactly 10 digits")
         updates["cardNo"] = card
         updates["cardNos"] = [card] if card else []
+        if card and await db.employees.find_one({
+            "_id": {"$ne": oid},
+            "$or": [{"cardNo": card}, {"cardNos": card}],
+        }, {"_id": 1}):
+            raise HTTPException(status_code=409, detail="Card already belongs to another employee")
 
     if existing.get("source") != "iVMS-4200":
         existing_id = str(existing.get("personId") or "").strip()
