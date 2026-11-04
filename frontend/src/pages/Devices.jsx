@@ -54,7 +54,10 @@ function DeleteChip({ onConfirm, testid }) {
 
 function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed }) {
     const [syncing, setSyncing] = useState(false);
-    const s = STATUS[device.status] || STATUS.online;
+    // Old manual AC rows may still have status="online" from the legacy
+    // Register Device form, even though they have no physical Gateway ID.
+    const unlinkedPhysical = (device.type === 'card' || device.type === 'face') && !device.gatewayDeviceId;
+    const s = unlinkedPhysical ? STATUS.unlinked : (STATUS[device.status] || STATUS.offline);
     const sync = async () => {
         if (device.type !== 'nvr') {
             await onInventoryRefreshed?.();
