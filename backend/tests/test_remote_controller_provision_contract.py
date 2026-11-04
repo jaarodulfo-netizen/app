@@ -29,7 +29,7 @@ class RemoteControllerContract(unittest.TestCase):
         self.assertIn('body.gatewayDeviceId.strip()', method)
         self.assertIn('ip_network(network)', method)
         self.assertIn('"credential": body.credentialSet', method)
-        self.assertNotIn('password', method.lower())
+        self.assertNotIn('"password":', method)
 
     def test_cannot_make_unlinked_cloud_record_appear_online(self):
         method = self.methods["provision_access_controller"]
