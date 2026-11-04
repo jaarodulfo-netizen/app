@@ -1375,6 +1375,9 @@ async def gateway_socket(websocket: WebSocket):
                         }},
                     )
                 await websocket.send_json({"type": "registered", "gatewayId": gateway_id, "hubTime": int(datetime.now().timestamp() * 1000)})
+                # Do not block the websocket receiver: it must process the
+                # acknowledgement that completes pending revocation delivery.
+                asyncio.create_task(retry_offboarding_on_gateway_connect(gateway_id))
                 continue
 
             if msg_type == "event":
@@ -1777,6 +1780,8 @@ async def ensure_hikvision_employee_identity(employee: dict) -> dict:
 
 
 async def sync_employee_to_gateway(employee: dict):
+    if employee.get("is_active") is False:
+        raise HTTPException(status_code=409, detail="Offboarded employee cannot be synced to hardware")
     employee = await ensure_hikvision_employee_identity(employee)
     cards = employee.get("cardNos")
     if not isinstance(cards, list):
@@ -1884,7 +1889,7 @@ async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(ge
     if not level:
         raise HTTPException(status_code=404, detail="Access level not found")
 
-    employees = await db.employees.find({"accessLevelId": item_id}).to_list(500)
+    employees = await db.employees.find({"accessLevelId": item_id, "is_active": {"$ne": False}}).to_list(500)
     for employee in employees:
         await db.employees.update_one(
             {"_id": employee["_id"]},
@@ -1998,7 +2003,7 @@ async def compare_historic_ivms_roster(user=Depends(require_commander)):
 
 @api_router.get("/employees")
 async def list_employees(user=Depends(require_enrollment)):
-    docs = await db.employees.find().sort("created_at", -1).to_list(500)
+    docs = await db.employees.find({"is_active": {"$ne": False}}).sort("created_at", -1).to_list(500)
     return [doc_id(d) for d in docs]
 
 
@@ -2057,6 +2062,8 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
     existing = await db.employees.find_one({"_id": oid})
     if not existing:
         raise HTTPException(status_code=404, detail="Employee not found")
+    if existing.get("is_active") is False:
+        raise HTTPException(status_code=409, detail="Offboarded employee cannot be updated or re-enrolled")
 
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
 
@@ -2144,6 +2151,8 @@ async def retry_employee_sync(item_id: str, user=Depends(require_manual_sync)):
     employee = await db.employees.find_one({"_id": oid})
     if not employee:
         raise HTTPException(status_code=404, detail="Employee not found")
+    if employee.get("is_active") is False:
+        raise HTTPException(status_code=409, detail="Offboarded employee cannot be synced")
     if not normalize_door_rights(employee.get("doorRights")):
         raise HTTPException(status_code=400, detail="Employee has no explicit authorized doors")
     await db.employees.update_one(
@@ -2175,12 +2184,132 @@ async def retry_employee_sync(item_id: str, user=Depends(require_manual_sync)):
     }
 
 
-@api_router.delete("/employees/{item_id}")
-async def delete_employee(item_id: str, user=Depends(require_enrollment)):
-    r = await db.employees.delete_one({"_id": ObjectId(item_id)})
-    if r.deleted_count == 0:
+# Offboarding retains an audit trail and the disabled identity. The existing
+# Windows Gateway supports person.delete and queues a delete on EVERY local
+# controller and facial terminal. A queue ACK is NOT hardware read-back.
+_revocation_locks: dict[str, asyncio.Lock] = {}
+
+
+def revocation_view(doc: dict) -> dict:
+    return {
+        "id": str(doc["_id"]), "employeeId": doc["employeeId"],
+        "name": doc["name"], "personId": doc["personId"],
+        "cardNos": doc.get("cardNos", []),
+        "status": doc.get("status", "pending"),
+        "targetDevices": doc.get("targetDevices", []),
+        "queuedDevices": doc.get("queuedDevices", []),
+        "error": doc.get("error"),
+        "requestedAt": doc["requestedAt"],
+        "requestedBy": doc["requestedBy"],
+        "hardwareVerified": False,
+    }
+
+
+async def dispatch_employee_revocation(revocation_id: ObjectId) -> dict:
+    lock = _revocation_locks.setdefault(str(revocation_id), asyncio.Lock())
+    async with lock:
+        doc = await db.access_revocations.find_one({"_id": revocation_id})
+        if not doc or doc.get("status") == "queued":
+            return doc
+        try:
+            acknowledgement = await send_gateway_command({
+                "kind": "person.delete", "personId": doc["personId"],
+            }, gateway_id=doc.get("gatewayId") or "kerma-monterrey")
+            queued = acknowledgement.get("queuedFor") if isinstance(acknowledgement, dict) else None
+            if not isinstance(queued, list):
+                raise RuntimeError("Gateway did not return a device queue acknowledgement")
+            expected = set(doc.get("targetDevices") or [])
+            actual = {str(device_id) for device_id in queued}
+            if not expected or not expected.issubset(actual):
+                raise RuntimeError("Gateway did not queue deletion on every registered access device")
+            status, error = "queued", None
+        except Exception as exc:
+            status, error, actual = "pending", str(exc)[:350], set()
+        await db.access_revocations.update_one(
+            {"_id": revocation_id}, {"$set": {
+                "status": status, "error": error,
+                "queuedDevices": sorted(actual), "lastDispatchAt": datetime.now(timezone.utc),
+            }},
+        )
+        await db.employees.update_one(
+            {"_id": ObjectId(doc["employeeId"])},
+            {"$set": {"hardwareSync": "revocation_queued" if status == "queued" else "revocation_pending"}},
+        )
+        return await db.access_revocations.find_one({"_id": revocation_id})
+
+
+async def retry_offboarding_on_gateway_connect(gateway_id: str):
+    rows = await db.access_revocations.find(
+        {"gatewayId": gateway_id, "status": "pending"},
+    ).to_list(200)
+    for row in rows:
+        try:
+            await dispatch_employee_revocation(row["_id"])
+        except Exception as exc:
+            logger.error("Offboarding retry failed: %s", exc)
+
+
+@api_router.get("/employees/revocations")
+async def list_employee_revocations(user=Depends(require_commander)):
+    rows = await db.access_revocations.find().sort("requestedAt", -1).to_list(100)
+    return [revocation_view(row) for row in rows]
+
+
+@api_router.post("/employees/revocations/{revocation_id}/retry")
+async def retry_employee_revocation(revocation_id: str, user=Depends(require_commander)):
+    if not ObjectId.is_valid(revocation_id):
+        raise HTTPException(status_code=400, detail="Invalid revocation id")
+    record = await dispatch_employee_revocation(ObjectId(revocation_id))
+    if record is None:
+        raise HTTPException(status_code=404, detail="Revocation not found")
+    return revocation_view(record)
+
+
+@api_router.delete("/employees/{item_id}", status_code=202)
+async def delete_employee(item_id: str, user=Depends(require_commander)):
+    if not ObjectId.is_valid(item_id):
+        raise HTTPException(status_code=400, detail="Invalid employee id")
+    oid = ObjectId(item_id)
+    employee = await db.employees.find_one({"_id": oid})
+    if employee is None:
         raise HTTPException(status_code=404, detail="Employee not found")
-    return {"ok": True}
+    if employee.get("is_active") is False:
+        old = await db.access_revocations.find_one({"employeeId": item_id})
+        if old:
+            return revocation_view(old)
+        raise HTTPException(status_code=409, detail="Employee is already offboarded; manual security review required")
+    person_id = str(employee.get("personId") or employee.get("cardNo") or "").strip()
+    if not person_id:
+        raise HTTPException(status_code=409, detail="Missing Person ID; cannot revoke safely")
+    devices = await db.devices.find({
+        "type": {"$in": ["card", "face"]},
+        "gatewayDeviceId": {"$exists": True, "$ne": None},
+    }, {"gatewayDeviceId": 1, "gatewayId": 1}).to_list(500)
+    gateway_ids = {str(d.get("gatewayId") or "kerma-monterrey") for d in devices}
+    # Current deployment has one Kerma studio Gateway. Never silently skip
+    # registered controllers connected to another gateway.
+    if len(gateway_ids) != 1:
+        raise HTTPException(status_code=409, detail="Cannot safely offboard across multiple or missing Gateways")
+    targets = sorted({str(d["gatewayDeviceId"]) for d in devices if d.get("gatewayDeviceId")})
+    if not targets:
+        raise HTTPException(status_code=503, detail="No card controllers or facial terminals registered")
+    cards = employee.get("cardNos") if isinstance(employee.get("cardNos"), list) else [employee.get("cardNo")]
+    now = datetime.now(timezone.utc)
+    audit = {
+        "employeeId": item_id, "name": employee.get("name", ""),
+        "personId": person_id, "cardNos": [str(c) for c in cards if c],
+        "targetDevices": targets, "queuedDevices": [],
+        "gatewayId": next(iter(gateway_ids)), "status": "pending",
+        "requestedAt": now, "requestedBy": user["email"], "error": None,
+    }
+    inserted = await db.access_revocations.insert_one(audit)
+    await db.employees.update_one({"_id": oid}, {"$set": {
+        "is_active": False, "offboardedAt": now, "offboardedBy": user["email"],
+        "revocationId": str(inserted.inserted_id), "hardwareSync": "revocation_pending",
+        "syncRequestId": None,
+    }})
+    record = await dispatch_employee_revocation(inserted.inserted_id)
+    return revocation_view(record)
 
 
 @api_router.get("/cameras")
