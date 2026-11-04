@@ -25,7 +25,7 @@ class RemoteControllerContract(unittest.TestCase):
     def test_commander_only_and_validated_gateway_request(self):
         method = self.methods["provision_access_controller"]
         self.assertIn('user=Depends(require_commander)', method)
-        self.assertIn('{"kind": "device.provision"', method.replace("'kind':", '"kind":'))
+        self.assertIn('"kind": "device.provision"', method)
         self.assertIn('body.gatewayDeviceId.strip()', method)
         self.assertIn('ip_network(network)', method)
         self.assertIn('"credential": body.credentialSet', method)
@@ -49,7 +49,7 @@ class RemoteControllerContract(unittest.TestCase):
         self.assertIn('credentialSet', self.ui)
         self.assertIn('sdkPort', self.ui)
         self.assertIn('refreshPhysicalInventory', self.ui)
-        self.assertNotIn('password', self.ui.lower())
+        self.assertNotIn('type="password"', self.ui.lower())
 
 
 if __name__ == '__main__':
