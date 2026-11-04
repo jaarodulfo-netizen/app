@@ -2762,6 +2762,15 @@ async def create_device(body: DeviceIn, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Device type must be gateway, nvr, face or card")
     if body.type == "nvr":
         ensure_permission(user, "cctv")
+    if body.type in {"card", "face"}:
+        existing_name = await db.devices.find_one({
+            "type": body.type, "name": body.name.strip(),
+        }, {"_id": 1})
+        if existing_name:
+            raise HTTPException(
+                status_code=409,
+                detail="An access device with this exact name already exists; refresh Gateway inventory instead of creating a duplicate",
+            )
     doc = body.model_dump()
     if body.type in {"card", "face"}:
         # A manual entry is inventory ONLY, not an authorized physical target.
@@ -3693,12 +3702,20 @@ async def migrate_hardware_doors_to_unplaced_once():
 async def seed_kerma_devices():
     attendance_id = None
     for item in KERMA_DEVICE_SEED:
-        existing = await db.devices.find_one({"name": item["name"]})
+        # Match physical devices by immutable Gateway ID, not mutable
+        # display name. A newly discovered controller must not be overwritten
+        # with a different static ID when Railway restarts.
+        gateway_device_id = item.get("gatewayDeviceId")
+        if item["type"] in {"card", "face"} and gateway_device_id:
+            existing = await db.devices.find_one({"gatewayDeviceId": gateway_device_id})
+        else:
+            existing = await db.devices.find_one({"name": item["name"]})
         if existing:
-            await db.devices.update_one(
-                {"_id": existing["_id"]},
-                {"$set": {**item, "status": existing.get("status", "online")}},
-            )
+            if item["type"] not in {"card", "face"}:
+                await db.devices.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {**item, "status": existing.get("status", "online")}},
+                )
             device_id = existing["_id"]
         else:
             doc = {**item, "status": "online", "created_at": datetime.now(timezone.utc)}
