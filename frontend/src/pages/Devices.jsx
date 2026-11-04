@@ -121,8 +121,12 @@ function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed
 }
 
 function AddDeviceModal({ open, onClose }) {
-    const { addDevice } = useSecurity();
+    const { addDevice, refreshPhysicalInventory } = useSecurity();
     const [type, setType] = useState('nvr');
+    const [controllerId, setControllerId] = useState('');
+    const [credentialSet, setCredentialSet] = useState('A');
+    const [controllerDoors, setControllerDoors] = useState([1, 2, 3, 4]);
+    const [sdkPort, setSdkPort] = useState('8000');
     const [name, setName] = useState('');
     const [ip, setIp] = useState('');
     const [fw, setFw] = useState('');
@@ -132,19 +136,30 @@ function AddDeviceModal({ open, onClose }) {
         e.preventDefault();
         setSaving(true);
         try {
-            await addDevice({ type, name: name.trim(), ip: ip.trim(), fw: fw.trim(), detail: '' });
-            if (type === 'card' || type === 'face') {
-                toast.info('DEVICE ENTRY SAVED', {
-                    description: 'This is not yet a linked controller. Add the same-named device to Windows Gateway, reconnect Gateway and refresh inventory to discover its doors.',
+            if (type === 'card') {
+                const { data } = await api.post('/devices/provision-controller', {
+                    name: name.trim(),
+                    gatewayDeviceId: controllerId.trim(),
+                    ip: ip.trim(),
+                    doors: controllerDoors,
+                    credentialSet,
+                    sdkPort: Number(sdkPort),
+                });
+                if (!data?.gatewayConfirmed) throw new Error('Gateway did not confirm configuration');
+                await refreshPhysicalInventory();
+                toast.success('AC REGISTERED THROUGH WINDOWS GATEWAY', {
+                    description: 'Configuration acknowledged. Verify the physical controller and each door before granting access.',
                 });
             } else {
+                await addDevice({ type, name: name.trim(), ip: ip.trim(), fw: fw.trim(), detail: '' });
                 toast.success('DEVICE REGISTERED', { description: name });
             }
             setName(''); setIp(''); setFw(''); setType('nvr');
+            setControllerId(''); setControllerDoors([1, 2, 3, 4]); setCredentialSet('A'); setSdkPort('8000');
             onClose();
         } catch (err) {
             toast.error('REGISTER FAILED', {
-                description: err?.response?.data?.detail || 'Could not save device — try again',
+                description: err?.response?.data?.detail || err?.message || 'Could not save device — try again',
             });
         } finally {
             setSaving(false);
@@ -201,15 +216,52 @@ function AddDeviceModal({ open, onClose }) {
                                         className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 mono text-xs text-sky-200 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60 transition-colors duration-200" />
                                 </div>
                             </div>
-                            {(type === 'card' || type === 'face') && (
-                                <p className="text-xs text-orange-200">This entry alone does not create physical doors. Use the exact Windows Gateway device name and configure the controller locally before reconnecting the Gateway.</p>
+                            {type === 'card' && (
+                                <div className="space-y-3 rounded-xl border border-sky-400/25 bg-sky-500/[0.04] p-3">
+                                    <p className="text-sm font-semibold text-sky-200">REGISTER AC DIRECTLY IN WINDOWS GATEWAY</p>
+                                    <p className="text-xs text-slate-400">No local JSON edits. Requires one-time Gateway V4 support. Uses an existing credential set stored on the Windows PC — passwords never enter Railway.</p>
+                                    <div>
+                                        <label className="mono text-[10px] text-slate-400">STABLE GATEWAY DEVICE ID</label>
+                                        <input data-testid="ac-gateway-device-id" value={controllerId}
+                                            required onChange={e => setControllerId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                                            placeholder="e.g. new-floor-ac"
+                                            className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f172a] p-2.5 font-mono text-xs text-sky-100" />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <label className="text-xs text-slate-400">SDK PORT
+                                            <input value={sdkPort} type="number" min="1" max="65535" onChange={e => setSdkPort(e.target.value)}
+                                                className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f172a] p-2.5 text-slate-200" />
+                                        </label>
+                                        <label className="text-xs text-slate-400">LOCAL CREDENTIAL SET
+                                            <select value={credentialSet} onChange={e => setCredentialSet(e.target.value)}
+                                                className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f172a] p-2.5 text-slate-200">
+                                                {['A','B','C','D'].map(x => <option key={x} value={x}>{x}</option>)}
+                                            </select>
+                                        </label>
+                                    </div>
+                                    <p className="text-xs text-slate-400">PHYSICAL DOOR OUTPUTS</p>
+                                    <div className="grid grid-cols-4 gap-2">
+                                        {[1, 2, 3, 4].map(number => (
+                                            <label key={number} className="flex items-center gap-1.5 text-xs text-slate-200">
+                                                <input type="checkbox" checked={controllerDoors.includes(number)} onChange={() =>
+                                                    setControllerDoors(prev => prev.includes(number)
+                                                        ? prev.filter(n => n !== number) : [...prev, number].sort())} />
+                                                {number}
+                                            </label>
+                                        ))}
+                                    </div>
+                                    <p className="text-xs text-orange-200">No employee will automatically receive access to the new controller.</p>
+                                </div>
+                            )}
+                            {type === 'face' && (
+                                <p className="text-xs text-orange-200">Facial scanner onboarding still requires the local Gateway inventory configuration.</p>
                             )}
                             <button data-testid="add-device-submit-btn" type="submit" disabled={saving}
                                 className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
                                     saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
                                 }`}>
                                 {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-                                {saving ? 'REGISTERING…' : 'REGISTER DEVICE'}
+                                {saving ? 'REGISTERING…' : type === 'card' ? 'REGISTER AC IN GATEWAY' : 'REGISTER DEVICE'}
                             </button>
                         </form>
                     </motion.div>
