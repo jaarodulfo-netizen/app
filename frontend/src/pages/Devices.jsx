@@ -139,7 +139,9 @@ function AddDeviceModal({ open, onClose }) {
             if (type === 'card') {
                 const { data } = await api.post('/devices/provision-controller', {
                     name: name.trim(),
-                    gatewayDeviceId: controllerId.trim(),
+                    gatewayDeviceId: controllerId.trim() || name.trim().toLowerCase()
+                        .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-')
+                        .replace(/^-|-$/g, '').slice(0, 80),
                     ip: ip.trim(),
                     doors: controllerDoors,
                     credentialSet,
@@ -223,9 +225,10 @@ function AddDeviceModal({ open, onClose }) {
                                     <div>
                                         <label className="mono text-[10px] text-slate-400">STABLE GATEWAY DEVICE ID</label>
                                         <input data-testid="ac-gateway-device-id" value={controllerId}
-                                            required onChange={e => setControllerId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
-                                            placeholder="e.g. new-floor-ac"
+                                            onChange={e => setControllerId(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                                            placeholder="Optional — generated from the AC name"
                                             className="mt-1 w-full rounded-lg border border-white/10 bg-[#0f172a] p-2.5 font-mono text-xs text-sky-100" />
+                                        <p className="mt-1 text-[10px] text-slate-500">Leave blank for an automatic stable ID; use a specific ID only if your inventory requires it.</p>
                                     </div>
                                     <div className="grid grid-cols-2 gap-3">
                                         <label className="text-xs text-slate-400">SDK PORT
