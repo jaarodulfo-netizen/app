@@ -140,7 +140,9 @@ function AddDeviceModal({ open, onClose }) {
             setName(''); setIp(''); setFw(''); setType('nvr');
             onClose();
         } catch (err) {
-            toast.error('REGISTER FAILED', { description: 'Could not save device — try again' });
+            toast.error('REGISTER FAILED', {
+                description: err?.response?.data?.detail || 'Could not save device — try again',
+            });
         } finally {
             setSaving(false);
         }
