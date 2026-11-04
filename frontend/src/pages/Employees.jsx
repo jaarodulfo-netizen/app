@@ -1177,7 +1177,6 @@ export default function Employees() {
                                                     {cards.length > 0 && emp.source !== 'iVMS-4200' && (
                                                         <button
                                                             data-testid={`retry-sync-${emp.id}`}
-                                                            disabled={user?.permissions?.sync !== true}
                                                             onClick={() => retryHardwareSync(emp)}
                                                             disabled={retryingId === emp.id || user?.permissions?.sync !== true}
                                                             title={user?.permissions?.sync !== true ? 'Tu cuenta necesita permiso Manual Sync' : 'Re-queue this employee on assigned devices (does not prove physical access)'}
