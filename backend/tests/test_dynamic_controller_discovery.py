@@ -26,11 +26,13 @@ def tested_inventory(devices_result=None, manual_matches=None, door_results=None
             return_value=manual_matches or []))),
         insert_one=AsyncMock(return_value=SimpleNamespace(inserted_id="new-device")),
         update_one=AsyncMock(),
+        update_many=AsyncMock(),
     )
     doors = SimpleNamespace(
         find_one=AsyncMock(side_effect=door_results if door_results is not None else [None] * 4),
         update_one=AsyncMock(),
         insert_one=AsyncMock(),
+        update_many=AsyncMock(),
     )
     env["db"] = SimpleNamespace(devices=docs, doors=doors)
     exec(compile(ast.Module(body=[fn], type_ignores=[]), str(SERVER), "exec"), env)
