@@ -40,8 +40,11 @@ function DeleteButton({ onConfirm, testid }) {
 }
 
 function AccessLevelsModal({ open, onClose }) {
-    const { doors, devices, updateDoor } = useSecurity();
+    const { doors, devices, updateDoor, refreshPhysicalInventory } = useSecurity();
     const [levels, setLevels] = useState([]);
+    const [editingLevelId, setEditingLevelId] = useState(null);
+    const [confirmLevelUpdate, setConfirmLevelUpdate] = useState(false);
+    const [refreshingHardware, setRefreshingHardware] = useState(false);
     const [name, setName] = useState('');
     const [description, setDescription] = useState('');
     const [selected, setSelected] = useState([]);
@@ -58,8 +61,28 @@ function AccessLevelsModal({ open, onClose }) {
     };
 
     useEffect(() => {
-        if (open) load();
-    }, [open]);
+        if (open) {
+            load();
+            refreshPhysicalInventory().catch(() =>
+                toast.error('GATEWAY INVENTORY UNAVAILABLE'));
+        }
+    }, [open, refreshPhysicalInventory]);
+
+    const refreshHardware = async () => {
+        setRefreshingHardware(true);
+        try {
+            const data = await refreshPhysicalInventory();
+            toast.info('INVENTORY REFRESHED', {
+                description: `${data.devices.filter((d) => d.gatewayDeviceId && (d.type === 'card' || d.type === 'face')).length} linked access devices · ${data.doors.filter((d) => d.gatewayDeviceId && d.doorNo).length} door outputs. New devices must be configured in Windows Gateway and re-register first.`,
+            });
+        } catch (e) {
+            toast.error('INVENTORY REFRESH FAILED', {
+                description: formatApiError(e?.response?.data?.detail || e?.message),
+            });
+        } finally {
+            setRefreshingHardware(false);
+        }
+    };
 
     const gatewayDeviceMap = Object.fromEntries(
         (devices || []).filter((d) => d.gatewayDeviceId).map((d) => [d.gatewayDeviceId, d]),
@@ -107,10 +130,43 @@ function AccessLevelsModal({ open, onClose }) {
 
     const toggle = (key) => {
         setSelected((prev) => prev.includes(key) ? prev.filter((x) => x !== key) : [...prev, key]);
+        setConfirmLevelUpdate(false);
+    };
+
+    const resetLevelForm = () => {
+        setEditingLevelId(null);
+        setConfirmLevelUpdate(false);
+        setName('');
+        setDescription('');
+        setSelected([]);
+    };
+
+    const editLevel = (level) => {
+        setEditingLevelId(level.id);
+        setConfirmLevelUpdate(false);
+        setName(level.name);
+        setDescription(level.description || '');
+        setSelected(Object.entries(level.doorRights || {}).flatMap(([deviceId, numbers]) =>
+            (Array.isArray(numbers) ? numbers : []).map((number) => `${deviceId}:${number}`)));
     };
 
     const save = async () => {
         if (!name.trim() || selected.length === 0) return;
+        if (editingLevelId) {
+            const current = levels.find((level) => level.id === editingLevelId);
+            const previous = Object.entries(current?.doorRights || {}).flatMap(([deviceId, nums]) =>
+                (Array.isArray(nums) ? nums : []).map((n) => `${deviceId}:${n}`));
+            if (previous.some((key) => !selected.includes(key))) {
+                toast.error('DOOR REMOVAL REQUIRES REVOCATION', {
+                    description: 'This edit only adds access points. Removing previous door rights requires controlled hardware revocation.',
+                });
+                return;
+            }
+            if (!confirmLevelUpdate) {
+                setConfirmLevelUpdate(true);
+                return;
+            }
+        }
         const doorRights = {};
         for (const key of selected) {
             const [deviceId, doorNo] = key.split(':');
@@ -119,11 +175,17 @@ function AccessLevelsModal({ open, onClose }) {
         }
         setSaving(true);
         try {
-            await api.post('/access-levels', { name: name.trim(), description: description.trim(), doorRights });
-            toast.success('ACCESS LEVEL CREATED', { description: name.trim() });
-            setName('');
-            setDescription('');
-            setSelected([]);
+            const payload = { name: name.trim(), description: description.trim(), doorRights };
+            if (editingLevelId) {
+                await api.put(`/access-levels/${editingLevelId}`, payload);
+                toast.info('ACCESS LEVEL UPDATED', {
+                    description: 'Changes saved. Existing assigned employees are being queued for Gateway sync; verify each controller.',
+                });
+            } else {
+                await api.post('/access-levels', payload);
+                toast.success('ACCESS LEVEL CREATED', { description: name.trim() });
+            }
+            resetLevelForm();
             await load();
         } catch (e) {
             toast.error('ACCESS LEVEL FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
@@ -157,15 +219,28 @@ function AccessLevelsModal({ open, onClose }) {
                             <div>
                                 <p className="mono text-[10px] tracking-[0.35em] text-sky-400">PHYSICAL ACCESS POLICY</p>
                                 <h2 className="font-display text-xl font-bold text-white mt-2">Access Levels</h2>
-                                <p className="text-xs text-slate-500 mt-1">Create a level and select exactly which doors or turnstiles it can open.</p>
+                                <p className="text-xs text-slate-500 mt-1">Create or edit access levels. Newly discovered Gateway controller doors appear after an inventory refresh.</p>
                             </div>
-                            <button onClick={onClose} className="rounded-full border border-white/10 p-2 text-slate-400 hover:bg-white/10 hover:text-white">
-                                <X size={15} />
-                            </button>
+                            <div className="flex items-center gap-2">
+                                <button type="button" onClick={refreshHardware} disabled={refreshingHardware}
+                                    className="flex items-center gap-2 rounded-lg border border-sky-400/30 px-3 py-2 text-[10px] text-sky-200 disabled:opacity-50">
+                                    <RefreshCw size={13} className={refreshingHardware ? 'animate-spin' : ''} />
+                                    REFRESH INVENTORY
+                                </button>
+                                <button onClick={onClose} className="rounded-full border border-white/10 p-2 text-slate-400 hover:bg-white/10 hover:text-white">
+                                    <X size={15} />
+                                </button>
+                            </div>
                         </div>
 
                         <div className="mt-6 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
                             <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                                {editingLevelId && (
+                                    <div className="mb-4 rounded-lg border border-orange-400/30 bg-orange-400/5 px-3 py-2 text-xs text-orange-200">
+                                        EDITING EXISTING LEVEL · Adding selected doors broadens access for everyone assigned to this level.
+                                        <button type="button" className="ml-2 underline" onClick={resetLevelForm}>CANCEL EDIT</button>
+                                    </div>
+                                )}
                                 <div className="grid gap-3 sm:grid-cols-2">
                                     <div>
                                         <label className="mono text-[10px] tracking-widest text-slate-500">LEVEL NAME</label>
@@ -210,8 +285,11 @@ function AccessLevelsModal({ open, onClose }) {
                                 <button onClick={save} disabled={saving || !name.trim() || selected.length === 0}
                                     className="mt-5 flex items-center gap-2 rounded-full bg-sky-500 px-5 py-2.5 font-head font-bold tracking-widest text-xs text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
                                     {saving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                                    CREATE ACCESS LEVEL
+                                    {editingLevelId ? (confirmLevelUpdate ? 'CONFIRM LEVEL UPDATE' : 'SAVE LEVEL CHANGES') : 'CREATE ACCESS LEVEL'}
                                 </button>
+                                {editingLevelId && confirmLevelUpdate && (
+                                    <p className="mt-2 text-xs text-orange-300">Confirm applying these permissions to everyone assigned to this level. Physical device verification is required.</p>
+                                )}
                             </div>
 
                             <div className="rounded-xl border border-white/10 bg-black/20 p-4">
@@ -227,9 +305,13 @@ function AccessLevelsModal({ open, onClose }) {
                                                         <p className="mono text-[9px] text-sky-400 mt-1">{count} ACCESS POINT{count === 1 ? '' : 'S'}</p>
                                                         {level.description && <p className="text-xs text-slate-500 mt-1">{level.description}</p>}
                                                     </div>
-                                                    <button onClick={() => remove(level)} className="rounded-md border border-red-400/20 p-2 text-red-300 hover:bg-red-500/10">
-                                                        <Trash2 size={13} />
-                                                    </button>
+                                                    <div className="flex gap-2">
+                                                        <button type="button" onClick={() => editLevel(level)}
+                                                            className="rounded-md border border-sky-400/30 px-2 py-1 text-[10px] text-sky-200">EDIT</button>
+                                                        <button type="button" onClick={() => remove(level)} className="rounded-md border border-red-400/20 p-2 text-red-300 hover:bg-red-500/10">
+                                                            <Trash2 size={13} />
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         );

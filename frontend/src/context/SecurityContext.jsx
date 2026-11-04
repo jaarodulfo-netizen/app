@@ -160,6 +160,17 @@ export function SecurityProvider({ children }) {
         setCameras((prev) => (prev || []).filter((c) => c.id !== id));
     }, []);
 
+    // The Gateway sends its inventory when it registers/reconnects. Refresh
+    // these two cloud collections together so Access Levels sees new outputs.
+    const refreshPhysicalInventory = useCallback(async () => {
+        const [devicesResponse, doorsResponse] = await Promise.all([
+            api.get('/devices'), api.get('/doors'),
+        ]);
+        setDevices(devicesResponse.data || []);
+        setDoors(doorsResponse.data || []);
+        return { devices: devicesResponse.data || [], doors: doorsResponse.data || [] };
+    }, []);
+
     const addDevice = useCallback(async (dev) => {
         const { data } = await api.post('/devices', dev);
         setDevices((prev) => [...(prev || []), data]);
@@ -217,6 +228,7 @@ export function SecurityProvider({ children }) {
                 deleteCamera,
                 addDevice,
                 deleteDevice,
+                refreshPhysicalInventory,
                 addDoor,
                 updateDoor,
                 placeDoor,

@@ -1393,6 +1393,122 @@ async def send_gateway_command(command: dict, gateway_id: str = "kerma-monterrey
         gateway_pending.pop(request_id, None)
 
 
+async def register_gateway_physical_devices(gateway_id: str, advertised: list) -> int:
+    """Discover enabled local ACs/facials and their REAL door outputs from the
+    authenticated Windows Gateway inventory. Never fabricate hardware rights.
+    Preserve existing human door names, visibility, floor layout, and levels.
+    """
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", gateway_id):
+        raise ValueError("Invalid Gateway ID")
+    if not isinstance(advertised, list) or len(advertised) > 256:
+        raise ValueError("Invalid Gateway inventory")
+    now = datetime.now(timezone.utc)
+    seen = set()
+    discovered = 0
+    for raw in advertised:
+        if not isinstance(raw, dict):
+            continue
+        dev_id = str(raw.get("id") or "").strip()
+        role = str(raw.get("role") or "").strip()
+        dev_type = {"controller": "card", "face-terminal": "face"}.get(role)
+        reported_doors = raw.get("doors")
+        if (not dev_type or not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", dev_id)
+                or not isinstance(reported_doors, list) or len(reported_doors) > 99):
+            logger.warning("Skipping malformed Gateway hardware inventory item")
+            continue
+        # Door numbers must be actual advertised outputs. Never infer 4/1
+        # outputs from a user-entered name, model, or IP address.
+        if any(type(n) is not int or n < 1 or n > 99 for n in reported_doors):
+            logger.warning("Skipping invalid Gateway door numbers for %s", dev_id)
+            continue
+        if dev_id in seen:
+            logger.warning("Skipping duplicate Gateway device id %s", dev_id)
+            continue
+        seen.add(dev_id)
+        numbers = sorted(set(reported_doors))
+        name = str(raw.get("name") or dev_id).strip()[:120] or dev_id
+        online = raw.get("online") is True
+        existing = await db.devices.find_one({"gatewayDeviceId": dev_id})
+        if existing and existing.get("type") != dev_type:
+            logger.error("Gateway device %s conflicts with registered device type", dev_id)
+            continue
+        if existing and existing.get("gatewayId") not in (None, "", gateway_id):
+            logger.error("Gateway device %s is linked to another Gateway", dev_id)
+            continue
+
+        if not existing:
+            # Reconcile a manual registration only when the type and name are
+            # an exact UNIQUE match. Ambiguous matches stay untouched.
+            candidates = await db.devices.find({
+                "name": name, "type": dev_type,
+                "$or": [{"gatewayDeviceId": {"$exists": False}},
+                        {"gatewayDeviceId": None}, {"gatewayDeviceId": ""}],
+            }).to_list(2)
+            if len(candidates) == 1:
+                existing = candidates[0]
+            else:
+                doc = {
+                    "type": dev_type, "name": name, "ip": "", "fw": "",
+                    "detail": "Discovered from authenticated Windows Gateway",
+                    "signal": 95, "created_at": now,
+                }
+                result = await db.devices.insert_one(doc)
+                existing = {"_id": result.inserted_id, **doc}
+
+        await db.devices.update_one({"_id": existing["_id"]}, {"$set": {
+            "gatewayDeviceId": dev_id, "gatewayId": gateway_id,
+            "gatewayRegistered": True, "gatewayOnline": online,
+            "status": "online" if online else "offline",
+            "doors": numbers, "gatewayLastSeen": now,
+        }})
+        for number in numbers:
+            lookup = {"gatewayDeviceId": dev_id, "doorNo": number}
+            door = await db.doors.find_one(lookup)
+            link_fields = {
+                "deviceId": str(existing["_id"]), "gatewayDeviceId": dev_id,
+                "doorNo": number, "hardwareLinked": True,
+                "gatewayOnline": online,
+                "hardwareStatus": "online" if online else "offline",
+                "gatewayLastSeen": now,
+            }
+            if door:
+                await db.doors.update_one({"_id": door["_id"]}, {"$set": link_fields})
+            else:
+                await db.doors.insert_one({
+                    **link_fields, "name": name if len(numbers) == 1 else f"{name} · Door {number}",
+                    "zone": "GENERAL", "x": None, "y": None, "floor": None,
+                    "camId": None, "visible": True,
+                    "code": f"AC-{dev_id}-{number}", "status": "locked",
+                    "created_at": now,
+                })
+        discovered += 1
+
+    # A formerly linked AC omitted from this authenticated inventory is not
+    # online/confirmed anymore. Keep its doors and access-level history, but
+    # mark it offline; never silently remove or grant rights.
+    missing_filter = {
+        "gatewayId": gateway_id,
+        "gatewayDeviceId": {"$nin": sorted(seen)},
+        "type": {"$in": ["card", "face"]},
+    }
+    missing_devices = await db.devices.find(
+        missing_filter, {"gatewayDeviceId": 1},
+    ).to_list(1000)
+    if missing_devices:
+        await db.devices.update_many(missing_filter, {"$set": {
+            "gatewayOnline": False, "status": "offline",
+            "gatewayReason": "Missing from latest Gateway registration",
+        }})
+        missing_ids = [d["gatewayDeviceId"] for d in missing_devices
+                       if d.get("gatewayDeviceId")]
+        if missing_ids:
+            await db.doors.update_many(
+                {"gatewayDeviceId": {"$in": missing_ids}},
+                {"$set": {"gatewayOnline": False, "hardwareStatus": "offline"}},
+            )
+    return discovered
+
+
 @app.websocket("/gateway")
 async def gateway_socket(websocket: WebSocket):
     auth = websocket.headers.get("authorization", "")
@@ -1415,26 +1531,10 @@ async def gateway_socket(websocket: WebSocket):
                 gateway_id = str(msg.get("gatewayId") or "kerma-monterrey")
                 gateway_connections[gateway_id] = websocket
                 logger.info("Gateway registered: %s with %s devices", gateway_id, len(msg.get("devices") or []))
-                for dev in msg.get("devices") or []:
-                    await db.devices.update_one(
-                        {"gatewayDeviceId": dev.get("id")},
-                        {"$set": {
-                            "gatewayDeviceId": dev.get("id"),
-                            "gatewayId": gateway_id,
-                            "gatewayOnline": bool(dev.get("online")),
-                            "status": "online" if dev.get("online") else "offline",
-                            "doors": dev.get("doors") or [],
-                            "gatewayLastSeen": datetime.now(timezone.utc),
-                        }},
-                    )
-                    await db.doors.update_many(
-                        {"gatewayDeviceId": dev.get("id")},
-                        {"$set": {
-                            "gatewayOnline": bool(dev.get("online")),
-                            "hardwareStatus": "online" if dev.get("online") else "offline",
-                            "gatewayLastSeen": datetime.now(timezone.utc),
-                        }},
-                    )
+                registered_count = await register_gateway_physical_devices(
+                    gateway_id, msg.get("devices") or [],
+                )
+                logger.info("Gateway inventory registered %s physical devices", registered_count)
                 await websocket.send_json({"type": "registered", "gatewayId": gateway_id, "hubTime": int(datetime.now().timestamp() * 1000)})
                 # Do not block the websocket receiver: it must process the
                 # acknowledgement that completes pending revocation delivery.
@@ -1914,6 +2014,33 @@ async def sync_employee_to_gateway(employee: dict):
     })
 
 
+async def validate_physical_access_rights(rights: dict) -> None:
+    """Cloud access levels may reference only real hardware-linked outputs,
+    never invented IDs or manually entered devices without a Gateway link.
+    """
+    for gateway_device_id, numbers in rights.items():
+        hardware = await db.devices.find_one({
+            "gatewayDeviceId": gateway_device_id,
+            "type": {"$in": ["card", "face"]},
+        }, {"_id": 1})
+        if not hardware:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Access device {gateway_device_id} is not linked to a physical controller",
+            )
+        for door_no in numbers:
+            physical = await db.doors.find_one({
+                "gatewayDeviceId": gateway_device_id,
+                "doorNo": door_no,
+                "hardwareLinked": True,
+            }, {"_id": 1})
+            if not physical:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Physical door {gateway_device_id}:{door_no} has not been registered by the Gateway",
+                )
+
+
 @api_router.get("/access-levels")
 async def list_access_levels(user=Depends(get_current_user)):
     docs = await db.access_levels.find().sort("name", 1).to_list(200)
@@ -1921,7 +2048,7 @@ async def list_access_levels(user=Depends(get_current_user)):
 
 
 @api_router.post("/access-levels")
-async def create_access_level(body: AccessLevelIn, user=Depends(get_current_user)):
+async def create_access_level(body: AccessLevelIn, user=Depends(require_enrollment)):
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Access level name is required")
@@ -1930,6 +2057,7 @@ async def create_access_level(body: AccessLevelIn, user=Depends(get_current_user
     rights = normalize_door_rights(body.doorRights)
     if not rights:
         raise HTTPException(status_code=400, detail="Select at least one physical access point")
+    await validate_physical_access_rights(rights)
     doc = {
         "name": name,
         "description": body.description.strip(),
@@ -1943,7 +2071,7 @@ async def create_access_level(body: AccessLevelIn, user=Depends(get_current_user
 
 
 @api_router.put("/access-levels/{item_id}")
-async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(get_current_user)):
+async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(require_enrollment)):
     try:
         oid = ObjectId(item_id)
     except Exception:
@@ -1952,6 +2080,20 @@ async def update_access_level(item_id: str, body: AccessLevelIn, user=Depends(ge
     rights = normalize_door_rights(body.doorRights)
     if not name or not rights:
         raise HTTPException(status_code=400, detail="Name and at least one access point are required")
+    await validate_physical_access_rights(rights)
+    current_level = await db.access_levels.find_one({"_id": oid})
+    if not current_level:
+        raise HTTPException(status_code=404, detail="Access level not found")
+    previous_rights = normalize_door_rights(current_level.get("doorRights"))
+    removed = any(not set(old_numbers).issubset(set(rights.get(device_id, [])))
+                  for device_id, old_numbers in previous_rights.items())
+    if removed and await db.employees.count_documents({
+        "accessLevelId": item_id, "is_active": {"$ne": False},
+    }):
+        raise HTTPException(
+            status_code=409,
+            detail="Removing rights from an assigned access level requires verified hardware revocation; do not silently keep old credentials on devices",
+        )
     await db.access_levels.update_one(
         {"_id": oid},
         {"$set": {
@@ -2647,8 +2789,32 @@ async def create_device(body: DeviceIn, user=Depends(get_current_user)):
         raise HTTPException(status_code=400, detail="Device type must be gateway, nvr, face or card")
     if body.type == "nvr":
         ensure_permission(user, "cctv")
+    if body.type in {"card", "face"}:
+        existing_name = await db.devices.find_one({
+            "type": body.type, "name": body.name.strip(),
+        }, {"_id": 1})
+        if existing_name:
+            raise HTTPException(
+                status_code=409,
+                detail="An access device with this exact name already exists; refresh Gateway inventory instead of creating a duplicate",
+            )
     doc = body.model_dump()
-    doc["status"] = "online"
+    if body.type in {"card", "face"}:
+        # A manual entry is inventory ONLY, not an authorized physical target.
+        # It becomes selectable after the authenticated Gateway confirms its
+        # exact matching name/type and actual door outputs upon registration.
+        if body.gatewayDeviceId or body.doors:
+            raise HTTPException(
+                status_code=400,
+                detail="AC and facial door identities must come from the authenticated Windows Gateway",
+            )
+        doc["gatewayDeviceId"] = None
+        doc["doors"] = []
+        doc["gatewayRegistered"] = False
+        doc["gatewayOnline"] = False
+        doc["status"] = "unlinked"
+    else:
+        doc["status"] = "online"
     doc["created_at"] = datetime.now(timezone.utc)
     r = await db.devices.insert_one(doc)
     doc["_id"] = r.inserted_id
@@ -2763,7 +2929,7 @@ async def sync_nvr_channels(item_id: str, user=Depends(require_cctv)):
 
 @api_router.get("/doors")
 async def list_doors(user=Depends(get_current_user)):
-    docs = await db.doors.find().sort("created_at", 1).to_list(200)
+    docs = await db.doors.find().sort("created_at", 1).to_list(500)
     return [doc_id(d) for d in docs]
 
 
@@ -3563,12 +3729,20 @@ async def migrate_hardware_doors_to_unplaced_once():
 async def seed_kerma_devices():
     attendance_id = None
     for item in KERMA_DEVICE_SEED:
-        existing = await db.devices.find_one({"name": item["name"]})
+        # Match physical devices by immutable Gateway ID, not mutable
+        # display name. A newly discovered controller must not be overwritten
+        # with a different static ID when Railway restarts.
+        gateway_device_id = item.get("gatewayDeviceId")
+        if item["type"] in {"card", "face"} and gateway_device_id:
+            existing = await db.devices.find_one({"gatewayDeviceId": gateway_device_id})
+        else:
+            existing = await db.devices.find_one({"name": item["name"]})
         if existing:
-            await db.devices.update_one(
-                {"_id": existing["_id"]},
-                {"$set": {**item, "status": existing.get("status", "online")}},
-            )
+            if item["type"] not in {"card", "face"}:
+                await db.devices.update_one(
+                    {"_id": existing["_id"]},
+                    {"$set": {**item, "status": existing.get("status", "online")}},
+                )
             device_id = existing["_id"]
         else:
             doc = {**item, "status": "online", "created_at": datetime.now(timezone.utc)}
