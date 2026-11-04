@@ -27,9 +27,12 @@ class PermissionsContract(unittest.TestCase):
     def test_enrollment_manual_sync_is_independent(self):
         src = ast.get_source_segment(self.source, self.functions["retry_employee_sync"])
         self.assertIn("Depends(require_manual_sync)", src)
-        for name in ("list_employees", "create_employee", "update_employee", "delete_employee"):
+        for name in ("list_employees", "create_employee", "update_employee"):
             self.assertIn("Depends(require_enrollment)",
                           ast.get_source_segment(self.source, self.functions[name]))
+        # Offboarding is intentionally restricted to commanders.
+        self.assertIn("Depends(require_commander)",
+                      ast.get_source_segment(self.source, self.functions["delete_employee"]))
 
     def test_facial_permanent_release_guard(self):
         for name in ("start_single_emergency_test", "activate_emergency_release"):
