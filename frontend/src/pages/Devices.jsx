@@ -17,6 +17,7 @@ const STATUS = {
     online: { label: 'ONLINE', dot: 'bg-emerald-400', text: 'text-emerald-300' },
     degraded: { label: 'DEGRADED', dot: 'bg-[#ea7f2b]', text: 'text-orange-300' },
     offline: { label: 'OFFLINE', dot: 'bg-red-500', text: 'text-red-400' },
+    unlinked: { label: 'NOT LINKED', dot: 'bg-orange-400', text: 'text-orange-300' },
 };
 
 function SignalBars({ value }) {
@@ -51,12 +52,12 @@ function DeleteChip({ onConfirm, testid }) {
     );
 }
 
-function DeviceCard({ device, index, onDelete, onNvrSynced }) {
+function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed }) {
     const [syncing, setSyncing] = useState(false);
     const s = STATUS[device.status] || STATUS.online;
     const sync = async () => {
         if (device.type !== 'nvr') {
-            toast.info('SYNC NOT REQUIRED', { description: `${device.name} is managed by the local gateway` });
+            await onInventoryRefreshed?.();
             return;
         }
         setSyncing(true);
@@ -92,6 +93,12 @@ function DeviceCard({ device, index, onDelete, onNvrSynced }) {
                 <span className="text-slate-300 text-right">{device.fw || '—'}</span>
             </div>
             {device.detail && <p className="mono text-[9px] tracking-wider text-slate-500 mt-3 truncate">{device.detail}</p>}
+            {(device.type === 'card' || device.type === 'face') && (
+                <div className="mt-3 text-[10px] text-sky-200">
+                    {device.gatewayDeviceId ? `GATEWAY ID: ${device.gatewayDeviceId} · ${(device.doors || []).length} OUTPUTS`
+                        : 'NOT LINKED TO GATEWAY — configure the physical device there and reconnect the Gateway'}
+                </div>
+            )}
             <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
                 <SignalBars value={device.signal} />
                 <div className="flex items-center gap-4">
@@ -101,7 +108,7 @@ function DeviceCard({ device, index, onDelete, onNvrSynced }) {
                         className="flex items-center gap-1.5 mono text-[10px] tracking-widest text-sky-400 transition-colors duration-200 hover:text-cyan-300"
                     >
                         <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
-                        {syncing ? 'SYNCING…' : device.type === 'nvr' ? 'SYNC NVR CHANNELS' : 'SYNC NOW'}
+                        {syncing ? 'SYNCING…' : device.type === 'nvr' ? 'SYNC NVR CHANNELS' : 'REFRESH INVENTORY'}
                     </button>
                     <DeleteChip testid={`delete-device-${device.id}`} onConfirm={() => onDelete(device)} />
                 </div>
@@ -123,7 +130,13 @@ function AddDeviceModal({ open, onClose }) {
         setSaving(true);
         try {
             await addDevice({ type, name: name.trim(), ip: ip.trim(), fw: fw.trim(), detail: '' });
-            toast.success('DEVICE REGISTERED', { description: name });
+            if (type === 'card' || type === 'face') {
+                toast.info('DEVICE ENTRY SAVED', {
+                    description: 'This is not yet a linked controller. Add the same-named device to Windows Gateway, reconnect Gateway and refresh inventory to discover its doors.',
+                });
+            } else {
+                toast.success('DEVICE REGISTERED', { description: name });
+            }
             setName(''); setIp(''); setFw(''); setType('nvr');
             onClose();
         } catch (err) {
@@ -163,7 +176,7 @@ function AddDeviceModal({ open, onClose }) {
                                     <option value="nvr">NVR RECORDER</option>
                                     <option value="gateway">GATEWAY</option>
                                     <option value="face">FACIAL SCANNER</option>
-                                    <option value="card">CARD READER</option>
+                                    <option value="card">ACCESS CONTROLLER (AC)</option>
                                 </select>
                             </div>
                             <div>
@@ -183,6 +196,9 @@ function AddDeviceModal({ open, onClose }) {
                                         className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 mono text-xs text-sky-200 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60 transition-colors duration-200" />
                                 </div>
                             </div>
+                            {(type === 'card' || type === 'face') && (
+                                <p className="text-xs text-orange-200">This entry alone does not create physical doors. Use the exact Windows Gateway device name and configure the controller locally before reconnecting the Gateway.</p>
+                            )}
                             <button data-testid="add-device-submit-btn" type="submit" disabled={saving}
                                 className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
                                     saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
@@ -199,7 +215,23 @@ function AddDeviceModal({ open, onClose }) {
 }
 
 export default function Devices() {
-    const { devices, deleteDevice, refreshCameras } = useSecurity();
+    const { devices, deleteDevice, refreshCameras, refreshPhysicalInventory } = useSecurity();
+    const [refreshing, setRefreshing] = useState(false);
+    const refreshGateway = async () => {
+        setRefreshing(true);
+        try {
+            const inventory = await refreshPhysicalInventory();
+            const count = inventory.devices.filter((device) =>
+                device.gatewayDeviceId && ['card', 'face'].includes(device.type)).length;
+            toast.info('GATEWAY INVENTORY REFRESHED', {
+                description: `${count} linked access devices. If the new AC is missing, enable it in Windows Gateway and reconnect that Gateway so it reports its inventory.`,
+            });
+        } catch (err) {
+            toast.error('REFRESH FAILED', { description: err?.response?.data?.detail || err?.message });
+        } finally {
+            setRefreshing(false);
+        }
+    };
     const [addOpen, setAddOpen] = useState(false);
     const list = devices || [];
     const online = list.filter((d) => d.status === 'online').length;
@@ -226,6 +258,11 @@ export default function Devices() {
                             {online} ONLINE · {list.length - online} OFFLINE
                         </span>
                     )}
+                    <button type="button" onClick={refreshGateway} disabled={refreshing}
+                        data-testid="refresh-gateway-inventory"
+                        className="flex items-center gap-2 rounded-full border border-sky-400/30 px-4 py-2 text-xs text-sky-200 disabled:opacity-50">
+                        <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> REFRESH INVENTORY
+                    </button>
                     <button
                         data-testid="add-device-open-btn"
                         onClick={() => setAddOpen(true)}
@@ -262,7 +299,7 @@ export default function Devices() {
                             </div>
                             <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">
                                 {g.items.map((d, i) => (
-                                    <DeviceCard key={d.id} device={d} index={i} onDelete={remove} onNvrSynced={refreshCameras} />
+                                    <DeviceCard key={d.id} device={d} index={i} onDelete={remove} onNvrSynced={refreshCameras} onInventoryRefreshed={refreshGateway} />
                                 ))}
                             </div>
                         </section>
