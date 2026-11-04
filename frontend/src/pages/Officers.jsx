@@ -132,6 +132,9 @@ export default function Officers() {
     const [created, setCreated] = useState(null);
     const [expanded, setExpanded] = useState(null);
     const [deleteArmed, setDeleteArmed] = useState(null);
+    const [roleChangeArmed, setRoleChangeArmed] = useState(null);
+    const [roleSaving, setRoleSaving] = useState(null);
+    const activeAdminCount = officers.filter((o) => o.role === 'commander' && o.is_active !== false).length;
 
     const load = () => api.get('/auth/officers').then((r) => setOfficers(r.data)).catch(() => {});
     useEffect(() => {
@@ -151,6 +154,26 @@ export default function Officers() {
             load();
         } catch (err) {
             toast.error('ACTION BLOCKED', { description: formatApiError(err.response?.data?.detail) });
+        }
+    };
+
+    const changeOfficerRole = async (officer) => {
+        if (roleSaving || officer.id === user?.id) return;
+        const role = officer.role === 'commander' ? 'officer' : 'commander';
+        setRoleSaving(officer.id);
+        try {
+            await api.put(`/auth/officers/${officer.id}/role`, { role });
+            toast.success(role === 'commander' ? 'ADMIN ACCESS ENABLED' : 'ADMIN ACCESS REMOVED', {
+                description: `${officer.email} · Existing sessions revoked; sign in again to use the new role.`,
+            });
+            await load();
+        } catch (err) {
+            toast.error('ROLE UPDATE BLOCKED', {
+                description: formatApiError(err?.response?.data?.detail || err?.message),
+            });
+        } finally {
+            setRoleSaving(null);
+            setRoleChangeArmed(null);
         }
     };
 
@@ -197,7 +220,7 @@ export default function Officers() {
 
     return (
         <div className="space-y-6" data-testid="officers-page">
-            <PageHeader eyebrow="TEAM CLEARANCES // COMMANDER ONLY" title="Officer Accounts" />
+            <PageHeader eyebrow="TEAM CLEARANCES // ADMINS ONLY" title="Officer & Admin Accounts" />
 
             <div className="grid lg:grid-cols-[380px_1fr] gap-6 items-start">
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }} className="aegis-panel rounded-xl p-6">
@@ -315,7 +338,7 @@ export default function Officers() {
                                                 : 'text-sky-300 border-sky-500/25 bg-sky-500/5'
                                         }`}
                                     >
-                                        {o.role.toUpperCase()}
+                                        {o.role === 'commander' ? 'ADMIN' : o.role.toUpperCase()}
                                     </span>
                                     <span
                                         className={`mono text-[9px] tracking-widest rounded border px-2 py-1 shrink-0 hidden sm:block ${
@@ -374,6 +397,40 @@ export default function Officers() {
                                             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
                                             className="overflow-hidden border-t border-white/5"
                                         >
+                                            {o.id !== user?.id && (o.role === 'officer' || o.role === 'commander') && (
+                                                <div className="mx-5 mt-4 rounded-xl border border-orange-400/25 bg-orange-400/[0.04] p-4"
+                                                    data-testid={`officer-role-panel-${o.id}`}>
+                                                    <div className="flex flex-wrap items-center justify-between gap-4">
+                                                        <div className="max-w-xl">
+                                                            <p className="text-sm font-bold text-white">ADMINISTRATOR ROLE</p>
+                                                            <p className="mt-1 text-xs text-slate-400">
+                                                                {o.role === 'commander'
+                                                                    ? 'Remove administrator access and return this user to Officer permissions.'
+                                                                    : 'Administrators can manage personnel, access permissions, devices, offboarding, and other administrator-only functions.'}
+                                                                {' '}Changing roles ends the account's current sessions.
+                                                            </p>
+                                                        </div>
+                                                        <button type="button"
+                                                            data-testid={`change-officer-role-${o.email}`}
+                                                            disabled={roleSaving === o.id || (o.role === 'commander' && activeAdminCount <= 1) || (o.role === 'officer' && !o.is_active)}
+                                                            onClick={() => roleChangeArmed === o.id ? changeOfficerRole(o) : setRoleChangeArmed(o.id)}
+                                                            className={`rounded-lg border px-4 py-2.5 text-xs font-bold disabled:cursor-not-allowed disabled:opacity-40 ${
+                                                                roleChangeArmed === o.id ? 'border-red-400/70 bg-red-500/10 text-red-200'
+                                                                : 'border-orange-400/40 text-orange-200 hover:bg-orange-500/10'
+                                                            }`}>
+                                                            {roleSaving === o.id ? 'UPDATING...'
+                                                                : roleChangeArmed === o.id ? 'CONFIRM ROLE CHANGE'
+                                                                : o.role === 'commander' ? 'DEMOTE TO OFFICER' : 'PROMOTE TO ADMIN'}
+                                                        </button>
+                                                    </div>
+                                                    {roleChangeArmed === o.id && (
+                                                        <p role="alert" className="mt-3 text-xs text-red-200">
+                                                            Confirm change for {o.name} ({o.email}) — {o.role === 'commander' ? 'Officer' : 'Administrator'} permissions will apply on the next login.
+                                                            <button type="button" className="ml-3 underline" onClick={() => setRoleChangeArmed(null)}>CANCEL</button>
+                                                        </p>
+                                                    )}
+                                                </div>
+                                            )}
                                             <OfficerCapabilities officer={o} onSaved={load} />
                                             <SessionList officerId={o.id} />
                                         </motion.div>

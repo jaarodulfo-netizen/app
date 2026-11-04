@@ -135,6 +135,11 @@ class OfficerPermissionUpdate(BaseModel):
     cctv: bool
 
 
+class OfficerRoleUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: str
+
+
 OFFICER_DEFAULT_PERMISSIONS = {"enrollment": True, "sync": False, "cctv": True}
 
 
@@ -478,7 +483,7 @@ async def set_officer_active(officer_id: str, body: OfficerUpdate, user=Depends(
     if str(target["_id"]) == str(user["_id"]):
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
     if not body.active and target.get("role") == "commander" and target.get("is_active", True):
-        other_commanders = await db.users.count_documents({"role": "commander", "is_active": True, "_id": {"$ne": target["_id"]}})
+        other_commanders = await db.users.count_documents({"role": "commander", "is_active": {"$ne": False}, "_id": {"$ne": target["_id"]}})
         if other_commanders == 0:
             raise HTTPException(status_code=400, detail="Cannot deactivate the last active commander")
     await db.users.update_one({"_id": target["_id"]}, {"$set": {"is_active": body.active}})
@@ -486,6 +491,62 @@ async def set_officer_active(officer_id: str, body: OfficerUpdate, user=Depends(
         await db.sessions.delete_many({"user_id": str(target["_id"])})
     updated = await db.users.find_one({"_id": target["_id"]})
     return public_user(updated)
+
+
+# Role elevation maps ADMIN to the existing commander role used by all
+# privileged endpoints. No new role string bypasses existing authorization.
+_officer_role_change_lock = asyncio.Lock()
+
+
+@api_router.put("/auth/officers/{officer_id}/role")
+async def update_officer_role(officer_id: str, body: OfficerRoleUpdate, user=Depends(require_commander)):
+    if body.role not in {"officer", "commander"}:
+        raise HTTPException(status_code=400, detail="Role must be officer or commander")
+    if not ObjectId.is_valid(officer_id):
+        raise HTTPException(status_code=400, detail="Invalid officer ID")
+    oid = ObjectId(officer_id)
+    if oid == user["_id"]:
+        raise HTTPException(status_code=400, detail="You cannot change your own administrator role")
+
+    # Serializes concurrent role edits in this one-replica application. Never
+    # demote the final active commander or elevate a disabled account.
+    async with _officer_role_change_lock:
+        target = await db.users.find_one({"_id": oid})
+        if not target:
+            raise HTTPException(status_code=404, detail="Account not found")
+        previous_role = target.get("role")
+        if previous_role not in {"officer", "commander"}:
+            raise HTTPException(status_code=409, detail="Unsupported account role")
+        if previous_role == body.role:
+            return public_user(target)
+        if body.role == "commander" and not target.get("is_active", True):
+            raise HTTPException(status_code=409, detail="Cannot promote a deactivated account")
+        if previous_role == "commander" and target.get("is_active", True):
+            other_admins = await db.users.count_documents({
+                "role": "commander", "is_active": {"$ne": False},
+                "_id": {"$ne": oid},
+            })
+            if other_admins < 1:
+                raise HTTPException(status_code=409, detail="Cannot demote the last active administrator")
+
+        now = datetime.now(timezone.utc)
+        result = await db.users.update_one(
+            {"_id": oid, "role": previous_role, "is_active": {"$ne": False} if target.get("is_active", True) else False},
+            {"$set": {"role": body.role, "roleUpdatedAt": now,
+                      "roleUpdatedBy": user["email"]}},
+        )
+        if result.modified_count != 1:
+            raise HTTPException(status_code=409, detail="Account changed during role update; refresh and retry")
+        # Existing JWT carries a role claim, but real authorization reads the
+        # database each request. Revoke old sessions so the UI refreshes too.
+        await db.sessions.delete_many({"user_id": officer_id})
+        await db.security_permission_audit.insert_one({
+            "type": "officer_role_changed", "targetUserId": officer_id,
+            "targetEmail": target["email"], "previousRole": previous_role,
+            "newRole": body.role, "actor": user["email"], "at": now,
+        })
+        updated = await db.users.find_one({"_id": oid})
+        return public_user(updated)
 
 
 @api_router.put("/auth/officers/{officer_id}/permissions")
@@ -522,7 +583,7 @@ async def delete_officer(officer_id: str, user=Depends(require_commander)):
     if str(target["_id"]) == str(user["_id"]):
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
     if target.get("role") == "commander":
-        other_commanders = await db.users.count_documents({"role": "commander", "_id": {"$ne": target["_id"]}})
+        other_commanders = await db.users.count_documents({"role": "commander", "is_active": {"$ne": False}, "_id": {"$ne": target["_id"]}})
         if other_commanders == 0:
             raise HTTPException(status_code=400, detail="Cannot delete the last commander")
     await db.users.delete_one({"_id": target["_id"]})
