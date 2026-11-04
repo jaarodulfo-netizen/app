@@ -1396,7 +1396,7 @@ async def send_gateway_command(command: dict, gateway_id: str = "kerma-monterrey
     gateway_pending[request_id] = fut
     try:
         await ws.send_json({"type": "command", "requestId": request_id, "command": command})
-        return await asyncio.wait_for(fut, timeout=20)
+        return await asyncio.wait_for(fut, timeout=45 if command.get("kind") == "device.provision" else 20)
     except asyncio.TimeoutError:
         raise HTTPException(status_code=504, detail="Kerma studio gateway did not respond")
     finally:
@@ -2799,7 +2799,7 @@ async def provision_access_controller(body: ControllerProvisionIn, user=Depends(
     Gateway WebSocket. A cloud record is NOT proof of installation.
     No passwords are accepted or stored in Railway.
     """
-    from ipaddress import ip_address
+    from ipaddress import ip_address, ip_network
 
     name = body.name.strip()
     device_id = body.gatewayDeviceId.strip()
@@ -2811,7 +2811,9 @@ async def provision_access_controller(body: ControllerProvisionIn, user=Depends(
         addr = ip_address(body.ip.strip())
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid controller IP address")
-    if addr.version != 4 or not addr.is_private or addr.is_loopback or addr.is_link_local:
+    if addr.version != 4 or not any(addr in ip_network(network) for network in (
+        "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+    )):
         raise HTTPException(status_code=400, detail="Controller IP must be a private LAN IPv4 address")
     if len(body.doors) not in range(1, 5) or any(type(n) is not int or n not in (1, 2, 3, 4) for n in body.doors):
         raise HTTPException(status_code=400, detail="Select between 1 and 4 physical controller outputs")
