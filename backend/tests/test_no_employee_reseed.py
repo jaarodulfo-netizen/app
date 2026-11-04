@@ -38,7 +38,7 @@ class NoEmployeeReseedOnStartup(unittest.TestCase):
     def test_credential_and_device_setup_remain(self):
         self.assertIn("await seed_kerma_devices()", self.source)
         self.assertIn("await seed_kerma_doors()", self.source)
-        self.assertIn('@api_router.delete("/employees/{item_id}")', self.source)
+        self.assertIn('@api_router.delete("/employees/{item_id}", status_code=202)', self.source)
         self.assertIn('@api_router.post("/employees")', self.source)
 
 
