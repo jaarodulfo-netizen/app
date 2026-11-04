@@ -532,6 +532,10 @@ function EnrollModal({ open, onClose }) {
 
 function EditEmployeeModal({ employee, onClose }) {
     const { updateEmployee, doors, devices } = useSecurity();
+    const { user } = useAuth();
+    const isImportedIvms = employee?.source === 'iVMS-4200';
+    const originalValidFrom = String(employee?.validFrom || '').slice(0, 10);
+    const originalValidTo = String(employee?.validTo || '').slice(0, 10);
     const [customRights, setCustomRights] = useState(!employee?.accessLevelId);
     const [selectedDoors, setSelectedDoors] = useState(() => {
         const rights = employee?.doorRights || {};
@@ -549,6 +553,8 @@ function EditEmployeeModal({ employee, onClose }) {
     const [accessLevelId, setAccessLevelId] = useState(employee?.accessLevelId || '');
     const initialCards = employee?.cardNos?.length ? employee.cardNos : (employee?.cardNo ? [employee.cardNo] : []);
     const [cardsText, setCardsText] = useState(initialCards.join(', '));
+    const [validFromDate, setValidFromDate] = useState(originalValidFrom);
+    const [validToDate, setValidToDate] = useState(originalValidTo);
     const [photo, setPhoto] = useState(null);
     const [photoPreview, setPhotoPreview] = useState(employee?.photoPath ? fileUrl(employee.photoPath) : null);
     const [saving, setSaving] = useState(false);
@@ -580,11 +586,22 @@ function EditEmployeeModal({ employee, onClose }) {
         .filter(Boolean);
 
     const cardsValid = parsedCards.every((v) => /^\d{10}$/.test(v));
+    const validityChanged = validFromDate !== originalValidFrom || validToDate !== originalValidTo;
+    const validityReady = !isImportedIvms || (validFromDate && validToDate &&
+        (!validityChanged || user?.role === 'commander'));
 
     const submit = async () => {
         if (!name.trim()) return;
         if (!cardsValid) {
             toast.error('INVALID CARD FORMAT', { description: 'Every card must contain exactly 10 digits.' });
+            return;
+        }
+        if (!validityReady) {
+            toast.error('IVMS VALIDITY REQUIRED', { description: 'A commander must approve a start and end date for this returning employee.' });
+            return;
+        }
+        if (isImportedIvms && validityChanged && validToDate < validFromDate) {
+            toast.error('INVALID VALIDITY', { description: 'Expiration cannot precede the start date.' });
             return;
         }
         setSaving(true);
@@ -620,8 +637,14 @@ function EditEmployeeModal({ employee, onClose }) {
                 cardNos: parsedCards,
                 cardNo: parsedCards[0] || '',
                 photoPath,
+                ...(isImportedIvms && validityChanged ? {
+                    validFrom: `${validFromDate}T00:00:00`,
+                    validTo: `${validToDate}T23:59:59`,
+                } : {}),
             });
-            toast.success('EMPLOYEE UPDATED', { description: `${name} saved successfully` });
+            toast.info('EMPLOYEE UPDATE QUEUED', {
+                description: `${name} saved. Verify access on each authorized Hikvision device.`,
+            });
             onClose();
         } catch (e) {
             toast.error('UPDATE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
@@ -675,6 +698,35 @@ function EditEmployeeModal({ employee, onClose }) {
                         <input value={role} onChange={(e) => setRole(e.target.value)}
                             className="mt-2 w-full rounded-lg border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-sky-400/60" />
                     </div>
+
+                    {isImportedIvms && (
+                        <div className="rounded-xl border border-orange-400/30 bg-orange-400/5 p-4" data-testid="ivms-rehire-validity">
+                            <p className="mono text-[10px] tracking-widest text-orange-200">IMPORTED iVMS · REHIRE VALIDITY</p>
+                            <p className="mt-2 text-xs text-slate-300">
+                                Keep the original Person ID and physical card. For a returning employee, a commander must explicitly approve a new validity period. No automatic three-year renewal.
+                            </p>
+                            {(!originalValidFrom || !originalValidTo) && (
+                                <p className="mt-2 text-xs text-orange-300">This imported record has no saved validity dates. Both dates are required before sync.</p>
+                            )}
+                            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <label className="text-xs text-slate-300">
+                                    VALID FROM
+                                    <input type="date" data-testid="ivms-valid-from" value={validFromDate}
+                                        disabled={user?.role !== 'commander'}
+                                        onChange={(e) => setValidFromDate(e.target.value)}
+                                        className="mt-1 block w-full rounded-lg border border-orange-400/25 bg-[#0f172a] p-2 text-slate-100 disabled:opacity-50" />
+                                </label>
+                                <label className="text-xs text-slate-300">
+                                    VALID THROUGH
+                                    <input type="date" data-testid="ivms-valid-to" value={validToDate}
+                                        disabled={user?.role !== 'commander'}
+                                        onChange={(e) => setValidToDate(e.target.value)}
+                                        className="mt-1 block w-full rounded-lg border border-orange-400/25 bg-[#0f172a] p-2 text-slate-100 disabled:opacity-50" />
+                                </label>
+                            </div>
+                            <p className="mt-2 text-[11px] text-slate-400">Dates use Monterrey local time; authorization expires at 23:59:59 on the final day. Only commanders can renew validity.</p>
+                        </div>
+                    )}
 
                     <div>
                         <label className="mono text-[10px] tracking-widest text-slate-500">ACCESS LEVEL</label>
@@ -737,7 +789,7 @@ function EditEmployeeModal({ employee, onClose }) {
 
                 <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-5">
                     <button onClick={onClose} className="rounded-full border border-white/10 px-5 py-2.5 mono text-[10px] tracking-widest text-slate-400 hover:text-white">CANCEL</button>
-                    <button onClick={submit} disabled={saving || !cardsValid || !name.trim() || (customRights ? selectedDoors.length === 0 : !accessLevelId)}
+                    <button onClick={submit} disabled={saving || !cardsValid || !validityReady || !name.trim() || (customRights ? selectedDoors.length === 0 : !accessLevelId)}
                         className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
                         {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                         {saving ? 'SAVING…' : 'SAVE CHANGES'}
