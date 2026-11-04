@@ -1722,7 +1722,7 @@ async def ensure_hikvision_employee_identity(employee: dict) -> dict:
         if not current_id or not current_id.isascii() or not current_id.isdigit():
             raise HTTPException(status_code=409, detail="Imported iVMS Person ID is missing or invalid")
         if not employee.get("validFrom") or not employee.get("validTo"):
-            raise HTTPException(status_code=409, detail="Imported iVMS validity must be retained")
+            raise HTTPException(status_code=409, detail="Imported iVMS user needs explicit approved Valid From and Valid To dates. Edit the existing user; do not recreate it.")
     else:
         if not current_id:
             # Never reuse a conflicting number or force an override.
@@ -2083,6 +2083,45 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
         raise HTTPException(status_code=409, detail="Offboarded employee cannot be updated or re-enrolled")
 
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
+
+    # Rehired iVMS staff may lack the original device validity. An authorized
+    # commander must explicitly supply a NEW date range before sync. Never
+    # silently grant another three years or alter the imported Person ID.
+    if existing.get("source") == "iVMS-4200":
+        original_id = str(existing.get("personId") or "").strip()
+        if "personId" in updates and str(updates["personId"]).strip() != original_id:
+            raise HTTPException(status_code=409, detail="Imported iVMS Person ID cannot be changed")
+        validity_changed = any(
+            str(updates.get(field) or "").strip() != str(existing.get(field) or "").strip()
+            for field in ("validFrom", "validTo") if field in updates
+        )
+        original_missing_validity = not (existing.get("validFrom") and existing.get("validTo"))
+        if original_missing_validity and not ("validFrom" in updates and "validTo" in updates):
+            raise HTTPException(
+                status_code=409,
+                detail="Imported iVMS employee has no validity dates. Enter a new approved start and end date in Edit Employee.",
+            )
+        if validity_changed:
+            if user.get("role") != "commander":
+                raise HTTPException(status_code=403, detail="Only a commander can authorize imported employee validity")
+            start_string = str(updates.get("validFrom") or existing.get("validFrom") or "").strip()
+            end_string = str(updates.get("validTo") or existing.get("validTo") or "").strip()
+            try:
+                start = datetime.fromisoformat(start_string)
+                end = datetime.fromisoformat(end_string)
+                if (start.tzinfo or end.tzinfo or start >= end
+                        or not 1970 <= start.year <= 2037 or end.year > 2037
+                        or end <= datetime.now(ZoneInfo("America/Monterrey")).replace(tzinfo=None)):
+                    raise ValueError("invalid local validity")
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Specify valid local start/end dates (through 2037); expiration must be in the future",
+                ) from exc
+            updates["validFrom"], updates["validTo"] = start_string, end_string
+            updates["validityApprovedBy"] = user["email"]
+            updates["validityApprovedAt"] = datetime.now(timezone.utc)
+            updates["validityApprovalReason"] = "rehire_existing_ivms_employee"
 
     cards = updates.get("cardNos")
     if cards is not None:
