@@ -34,7 +34,7 @@ function DeleteButton({ onConfirm, testid }) {
             }`}
         >
             <Trash2 size={12} />
-            {armed ? 'CONFIRM' : 'DELETE'}
+            {armed ? 'CONFIRM OFFBOARD' : 'OFFBOARD'}
         </button>
     );
 }
@@ -876,6 +876,34 @@ export default function Employees() {
     const [query, setQuery] = useState('');
     const [faceFilter, setFaceFilter] = useState('all');
     const [levelFilter, setLevelFilter] = useState('all');
+    const [revocations, setRevocations] = useState([]);
+    const [retryingRevocation, setRetryingRevocation] = useState(null);
+
+    const loadRevocations = async () => {
+        if (user?.role !== 'commander') return;
+        try {
+            const { data } = await api.get('/employees/revocations');
+            setRevocations(data || []);
+        } catch {
+            toast.error('REVOCATION STATUS UNAVAILABLE');
+        }
+    };
+
+    useEffect(() => {
+        if (user?.role === 'commander') loadRevocations();
+    }, [user?.role]);
+
+    const retryRevocation = async (id) => {
+        setRetryingRevocation(id);
+        try {
+            await api.post(`/employees/revocations/${id}/retry`);
+            await loadRevocations();
+        } catch (e) {
+            toast.error('RETRY FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally {
+            setRetryingRevocation(null);
+        }
+    };
 
     const filteredEmployees = (employees || []).filter((emp) => {
         const cards = emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : []);
@@ -921,10 +949,19 @@ export default function Employees() {
 
     const remove = async (emp) => {
         try {
-            await deleteEmployee(emp.id);
-            toast.info('RECORD REMOVED', { description: `${emp.name} removed from V2. Physical credential revocation is not confirmed.` });
+            const record = await deleteEmployee(emp.id);
+            await loadRevocations();
+            if (record.status === 'queued') {
+                toast.warning('ACCESS REMOVAL QUEUED', {
+                    description: `${emp.name}: ${record.queuedDevices.length}/${record.targetDevices.length} devices queued. Physical removal has NOT been verified.`,
+                });
+            } else {
+                toast.error('ACCESS REMOVAL PENDING', {
+                    description: `${emp.name}: Gateway offline or did not accept all device jobs. Retry from the revocation panel; do not assume access is blocked.`,
+                });
+            }
         } catch (e) {
-            toast.error('DELETE FAILED', { description: 'Could not remove employee — try again' });
+            toast.error('OFFBOARDING FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
         }
     };
 
@@ -993,6 +1030,44 @@ export default function Employees() {
                 </div>
             </div>
 
+            {user?.role === 'commander' && (
+                <section className="aegis-panel rounded-xl border border-orange-400/25 p-4 sm:p-5" data-testid="access-revocations">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                        <div>
+                            <h3 className="font-display font-semibold text-slate-100">OFFBOARDING · DEVICE REVOCATION</h3>
+                            <p className="text-xs text-orange-300 mt-1">QUEUED DOES NOT MEAN ACCESS IS PHYSICALLY REVOKED. Verify on each Hikvision device.</p>
+                        </div>
+                        <button type="button" onClick={loadRevocations} className="rounded-lg border border-white/15 p-2 text-slate-300" title="Refresh revocation status">
+                            <RefreshCw size={15} />
+                        </button>
+                    </div>
+                    {revocations.length === 0 ? (
+                        <p className="text-xs text-slate-500">No offboarding requests recorded.</p>
+                    ) : (
+                        <div className="space-y-2">
+                            {revocations.slice(0, 10).map((item) => (
+                                <div key={item.id} className="rounded-lg border border-white/10 px-3 py-3 flex flex-wrap gap-3 items-center justify-between" data-testid={`revocation-${item.id}`}>
+                                    <div>
+                                        <p className="text-sm font-medium text-slate-100">{item.name}</p>
+                                        <p className="mono text-[10px] text-slate-400">{item.personId} · {item.queuedDevices.length}/{item.targetDevices.length} QUEUED · {item.status.toUpperCase()}</p>
+                                        {item.error && <p className="mt-1 text-[11px] text-orange-300">{item.error}</p>}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] text-orange-300">HARDWARE UNVERIFIED</span>
+                                        {item.status === 'pending' && (
+                                            <button type="button" disabled={retryingRevocation === item.id}
+                                                onClick={() => retryRevocation(item.id)}
+                                                className="rounded-md border border-orange-400/40 px-3 py-1.5 text-[10px] text-orange-200 disabled:opacity-50">
+                                                {retryingRevocation === item.id ? 'RETRYING' : 'RETRY GATEWAY'}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </section>
+            )}
             {employees === null ? (
                 <p className="mono text-xs tracking-widest text-slate-600 py-16 text-center">LOADING REGISTRY…</p>
             ) : employees.length === 0 ? (
@@ -1102,7 +1177,6 @@ export default function Employees() {
                                                     {cards.length > 0 && emp.source !== 'iVMS-4200' && (
                                                         <button
                                                             data-testid={`retry-sync-${emp.id}`}
-                                                            disabled={user?.permissions?.sync !== true}
                                                             onClick={() => retryHardwareSync(emp)}
                                                             disabled={retryingId === emp.id || user?.permissions?.sync !== true}
                                                             title={user?.permissions?.sync !== true ? 'Tu cuenta necesita permiso Manual Sync' : 'Re-queue this employee on assigned devices (does not prove physical access)'}
