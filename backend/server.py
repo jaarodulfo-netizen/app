@@ -1491,17 +1491,21 @@ async def register_gateway_physical_devices(gateway_id: str, advertised: list) -
         "gatewayDeviceId": {"$nin": sorted(seen)},
         "type": {"$in": ["card", "face"]},
     }
-    await db.devices.update_many(missing_filter, {"$set": {
-        "gatewayOnline": False, "status": "offline",
-        "gatewayReason": "Missing from latest Gateway registration",
-    }})
-    await db.doors.update_many({
-        "gatewayDeviceId": {"$in": [
-            d["gatewayDeviceId"] async for d in db.devices.find(
-                missing_filter, {"gatewayDeviceId": 1}
-            ) if d.get("gatewayDeviceId")
-        ]},
-    }, {"$set": {"gatewayOnline": False, "hardwareStatus": "offline"}})
+    missing_devices = await db.devices.find(
+        missing_filter, {"gatewayDeviceId": 1},
+    ).to_list(1000)
+    if missing_devices:
+        await db.devices.update_many(missing_filter, {"$set": {
+            "gatewayOnline": False, "status": "offline",
+            "gatewayReason": "Missing from latest Gateway registration",
+        }})
+        missing_ids = [d["gatewayDeviceId"] for d in missing_devices
+                       if d.get("gatewayDeviceId")]
+        if missing_ids:
+            await db.doors.update_many(
+                {"gatewayDeviceId": {"$in": missing_ids}},
+                {"$set": {"gatewayOnline": False, "hardwareStatus": "offline"}},
+            )
     return discovered
 
 
