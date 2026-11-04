@@ -483,7 +483,7 @@ async def set_officer_active(officer_id: str, body: OfficerUpdate, user=Depends(
     if str(target["_id"]) == str(user["_id"]):
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
     if not body.active and target.get("role") == "commander" and target.get("is_active", True):
-        other_commanders = await db.users.count_documents({"role": "commander", "is_active": True, "_id": {"$ne": target["_id"]}})
+        other_commanders = await db.users.count_documents({"role": "commander", "is_active": {"$ne": False}, "_id": {"$ne": target["_id"]}})
         if other_commanders == 0:
             raise HTTPException(status_code=400, detail="Cannot deactivate the last active commander")
     await db.users.update_one({"_id": target["_id"]}, {"$set": {"is_active": body.active}})
@@ -583,7 +583,7 @@ async def delete_officer(officer_id: str, user=Depends(require_commander)):
     if str(target["_id"]) == str(user["_id"]):
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
     if target.get("role") == "commander":
-        other_commanders = await db.users.count_documents({"role": "commander", "_id": {"$ne": target["_id"]}})
+        other_commanders = await db.users.count_documents({"role": "commander", "is_active": {"$ne": False}, "_id": {"$ne": target["_id"]}})
         if other_commanders == 0:
             raise HTTPException(status_code=400, detail="Cannot delete the last commander")
     await db.users.delete_one({"_id": target["_id"]})
