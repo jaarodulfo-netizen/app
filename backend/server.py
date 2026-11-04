@@ -2096,7 +2096,7 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
             for field in ("validFrom", "validTo") if field in updates
         )
         original_missing_validity = not (existing.get("validFrom") and existing.get("validTo"))
-        if original_missing_validity and not ("validFrom" in updates and "validTo" in updates):
+        if original_missing_validity and not (str(updates.get("validFrom") or "").strip() and str(updates.get("validTo") or "").strip()):
             raise HTTPException(
                 status_code=409,
                 detail="Imported iVMS employee has no validity dates. Enter a new approved start and end date in Edit Employee.",
