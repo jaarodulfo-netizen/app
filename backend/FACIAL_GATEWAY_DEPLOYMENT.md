@@ -15,8 +15,11 @@ terminal-side `employeeNoNotExist` or `fetch failed` errors.
    or face credentials. Handle asynchronous ISAPI responses and read back the
    person record; do not treat HTTP queue acceptance as completed enrollment.
 3. Send the **same** `person.id` consistently as the terminal employeeNo on
-   person, card and facial requests. Preserve leading zeroes. Do not migrate
-   existing iVMS IDs without explicit mapping approval.
+   person, card and facial requests. New V2 employees receive a random unique
+   **Person ID independent of their physical card number**. The card number is
+   retained in the card credential's `value`, not used as `person.id`.
+   Preserve leading zeroes on cards. Do not migrate existing iVMS/V2 IDs
+   without explicit mapping approval.
 4. Map V2 `person.validFrom` and `person.validTo` to the **firmware-specific
    valid-time fields** on the terminal's user enrollment request. Enable the
    validity range and use local (Monterrey) wall-clock time. Avoid
@@ -53,3 +56,14 @@ terminal-side `employeeNoNotExist` or `fetch failed` errors.
 - New user, existing user update, expiry and permission revocation are all
   tested independently.
 - The six SDK card controllers remain functional after rollout.
+
+## Random Person IDs (cloud update)
+
+New enrollment generates a server-side 10-digit numeric Person ID between
+1200000000 and 1999999999, reserved atomically in MongoDB. This is separate
+from the ten-digit card number. Existing imported or registered Person IDs
+remain unchanged and no overwrite/override is permitted. The Windows Gateway
+already accepts a distinct person.id and card credential value, but requires
+hardware testing (and card/facial readback) before considering this verified.
+A card assigned to another employee is still rejected and must never be reused
+until safe, verified revocation is complete.
