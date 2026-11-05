@@ -2793,6 +2793,69 @@ async def list_devices(user=Depends(get_current_user)):
     return [doc_id(d) for d in docs]
 
 
+@api_router.get("/devices/reconciliation")
+async def preview_device_reconciliation(user=Depends(require_commander)):
+    """Read-only comparison of cloud inventory and confirmed Gateway identity.
+
+    A displayed LAN IP is not proof of the hardware at that address. Neither
+    IP matches nor similar names may grant credentials or rewrite door rights.
+    """
+    docs = await db.devices.find(
+        {"type": {"$in": ["card", "face"]}},
+        {"type": 1, "name": 1, "ip": 1, "gatewayDeviceId": 1,
+         "gatewayId": 1, "gatewayRegistered": 1, "gatewayOnline": 1,
+         "gatewayLastSeen": 1, "status": 1},
+    ).to_list(500)
+
+    def view(d):
+        linked = bool(d.get("gatewayRegistered") is True and d.get("gatewayDeviceId"))
+        return {
+            "id": str(d["_id"]), "name": str(d.get("name") or ""),
+            "type": d.get("type"), "displayIp": str(d.get("ip") or ""),
+            "gatewayDeviceId": d.get("gatewayDeviceId") if linked else None,
+            "linked": linked, "gatewayOnline": d.get("gatewayOnline") is True if linked else False,
+            "gatewayLastSeen": d.get("gatewayLastSeen") if linked else None,
+        }
+
+    registered = [view(d) for d in docs if d.get("gatewayRegistered") is True and d.get("gatewayDeviceId")]
+    pending = [view(d) for d in docs if not (d.get("gatewayRegistered") is True and d.get("gatewayDeviceId"))]
+    ip_to_rows = {}
+    for row in registered + pending:
+        ip = row["displayIp"].strip()
+        if ip:
+            ip_to_rows.setdefault(ip, []).append(row)
+    conflicts = [
+        {"displayIp": ip, "devices": [{"id": row["id"], "name": row["name"],
+                                      "type": row["type"], "linked": row["linked"]}
+                                     for row in rows]}
+        for ip, rows in sorted(ip_to_rows.items()) if len(rows) > 1
+    ]
+    # Names are only hints; no identity or permission changes are performed.
+    def folded(name):
+        return re.sub(r"[^a-z0-9]", "", str(name or "").casefold())
+    for row in pending:
+        row["possibleMatches"] = [
+            {"id": other["id"], "name": other["name"],
+             "gatewayDeviceId": other["gatewayDeviceId"]}
+            for other in registered
+            if other["type"] == row["type"] and folded(other["name"]) == folded(row["name"])
+        ]
+    return {
+        "readOnly": True, "identityVerifiedByIp": False,
+        "gatewayIpAvailable": False,
+        "summary": {"linked": len(registered), "pending": len(pending),
+                    "duplicateIpGroups": len(conflicts)},
+        "linked": sorted(registered, key=lambda row: (row["type"], row["name"])),
+        "pending": sorted(pending, key=lambda row: (row["type"], row["name"])),
+        "duplicateIps": conflicts,
+        "message": (
+            "Cloud IPs are display inventory only. Gateway V4.1 does not report its configured LAN "
+            "IP or safely reconfigure existing facial terminals. Never infer physical identity "
+            "from a matching name/IP or grant access to an unlinked record."
+        ),
+    }
+
+
 @api_router.post("/devices/provision-controller")
 async def provision_access_controller(body: ControllerProvisionIn, user=Depends(require_commander)):
     """Enroll one physical controller through the authenticated outbound
