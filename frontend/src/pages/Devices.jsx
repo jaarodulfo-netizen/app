@@ -139,6 +139,17 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
     const [fw, setFw] = useState('');
     const [saving, setSaving] = useState(false);
     const [confirmedNewController, setConfirmedNewController] = useState(false);
+    const [acStagingReady, setAcStagingReady] = useState(null);
+
+    useEffect(() => {
+        if (!open) return;
+        let mounted = true;
+        setAcStagingReady(null);
+        api.get('/gateway/status')
+            .then(({ data }) => { if (mounted) setAcStagingReady(data?.online === true && data?.acStagingReady === true); })
+            .catch(() => { if (mounted) setAcStagingReady(false); });
+        return () => { mounted = false; };
+    }, [open]);
 
     useEffect(() => {
         if (open && initialDevice?.type === 'card') {
@@ -152,6 +163,10 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
 
     const submit = async (e) => {
         e.preventDefault();
+        if (type === 'card' && !acStagingReady) {
+            toast.error('AC-ONLY ADD-ON NOT READY', { description: 'Install and start the isolated V5 AC-only Gateway add-on first. Existing access systems were not modified.' });
+            return;
+        }
         if (type === 'card' && !confirmedNewController) {
             toast.warning('HARDWARE IDENTITY NOT CONFIRMED', {
                 description: 'Confirm that this is a new, separate physical AC, not an existing controller with a reassigned IP.',
@@ -171,10 +186,11 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                     credentialSet,
                     sdkPort: Number(sdkPort),
                 });
-                if (!data?.gatewayConfirmed) throw new Error('Gateway did not confirm configuration');
+                if (!data?.gatewayConfirmed || data?.restartRequired !== true) throw new Error('Gateway did not confirm safe staged AC configuration');
                 await refreshPhysicalInventory();
-                toast.success('AC REGISTERED THROUGH WINDOWS GATEWAY', {
-                    description: 'Configuration acknowledged. Verify the physical controller and each door before granting access.',
+                toast.warning('AC SAVED — CONTROLLED GATEWAY RESTART REQUIRED', {
+                    duration: 14000,
+                    description: 'Config backed up and SDK login verified. The new AC is NOT active yet. Restart Windows Gateway in a supervised maintenance window, then refresh inventory.',
                 });
             } else {
                 await addDevice({ type, name: name.trim(), ip: ip.trim(), fw: fw.trim(), detail: '' });
@@ -246,7 +262,14 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                             {type === 'card' && (
                                 <div className="space-y-3 rounded-xl border border-sky-400/25 bg-sky-500/[0.04] p-3">
                                     <p className="text-sm font-semibold text-sky-200">REGISTER AC DIRECTLY IN WINDOWS GATEWAY</p>
-                                    <p className="text-xs text-slate-400">No local JSON edits. Requires one-time Gateway V4 support. Uses an existing credential set stored on the Windows PC — passwords never enter Railway.</p>
+                                    <p className="text-xs text-slate-400">Add NEW ACs without editing Windows JSON: one-time isolated V5 AC-only add-on required. Your existing engine, SDK, card sync and doors are unchanged. New AC becomes active only after a supervised Gateway restart.</p>
+                                    {acStagingReady === null ? (
+                                        <p className="text-xs text-slate-400">Checking Windows AC-only staging capability…</p>
+                                    ) : acStagingReady === false ? (
+                                        <p data-testid="ac-addon-not-ready" className="rounded-lg border border-orange-400/25 p-2 text-xs text-orange-200">AC-ONLY ADD-ON NOT READY. Install V5 on the existing Windows Gateway once, restart it, then reopen this form. No provisioning request will be sent before that.</p>
+                                    ) : (
+                                        <p data-testid="ac-addon-ready" className="text-xs text-emerald-300">AC-ONLY ADD-ON READY · new AC will be staged pending supervised restart</p>
+                                    )}
                                     <div>
                                         <label className="mono text-[10px] text-slate-400">STABLE GATEWAY DEVICE ID</label>
                                         <input data-testid="ac-gateway-device-id" value={controllerId}
@@ -291,12 +314,12 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                             )}
                             </div>
                             <div className="shrink-0 border-t border-white/10 bg-[#0b1220] pt-3">
-                            <button data-testid="add-device-submit-btn" type="submit" disabled={saving || (type === 'card' && (!confirmedNewController || controllerDoors.length === 0))}
+                            <button data-testid="add-device-submit-btn" type="submit" disabled={saving || (type === 'card' && (!acStagingReady || !confirmedNewController || controllerDoors.length === 0))}
                                 className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
                                     saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
                                 }`}>
                                 {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-                                {saving ? 'REGISTERING…' : type === 'card' ? 'REGISTER AC IN GATEWAY' : 'REGISTER DEVICE'}
+                                {saving ? 'STAGING…' : type === 'card' ? 'SAVE NEW AC TO GATEWAY' : 'REGISTER DEVICE'}
                             </button>
                             </div>
                         </form>
@@ -311,12 +334,25 @@ function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
     const [report, setReport] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [localDevices, setLocalDevices] = useState(null);
+    const [localStatus, setLocalStatus] = useState('');
 
     useEffect(() => {
         if (!open) return;
         let cancelled = false;
         setLoading(true);
         setError('');
+        setLocalDevices(null);
+        setLocalStatus('Checking actual Windows Gateway inventory…');
+        api.get('/devices/gateway-local-inventory')
+            .then(({ data }) => { if (!cancelled) { setLocalDevices(data.devices || []); setLocalStatus(''); } })
+            .catch(err => {
+                if (!cancelled) setLocalStatus(
+                    err?.response?.status === 412
+                        ? 'V5 AC-only module not installed. Actual Windows IP assignments are not available yet.'
+                        : (err?.response?.data?.detail || 'Could not reach local Gateway configuration')
+                );
+            });
         api.get('/devices/reconciliation')
             .then(({ data }) => { if (!cancelled) setReport(data); })
             .catch(err => { if (!cancelled) setError(err?.response?.data?.detail || 'Could not read reconciliation report'); })
@@ -350,7 +386,21 @@ function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
                             )}
                         </div>
                         <div className="rounded-lg border border-orange-400/25 bg-orange-400/5 px-4 py-3 text-xs text-orange-100">
-                            IPs shown in the app are cloud records, NOT verified current Gateway endpoints. Matching names or IPs never proves a physical identity. Gateway V4.1 does not remotely reconfigure existing facial IPs.
+                            Cloud IPs are display records, not verified Windows endpoints. With V5, Windows inventory is read directly without PowerShell. A duplicate IP will block creation; do not erase or rename existing doors automatically. V5 does not reconfigure existing facial IPs.
+                        </div>
+                        <div>
+                            <p className="mono text-[10px] tracking-widest text-emerald-300">LIVE WINDOWS CONFIG — READ ONLY</p>
+                            {localStatus && <p className="mt-2 text-xs text-orange-300">{localStatus}</p>}
+                            {localDevices && (
+                                <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-white/10">
+                                    {localDevices.map(item => (
+                                        <div key={item.gatewayDeviceId} className="flex flex-wrap justify-between gap-2 border-b border-white/5 px-3 py-2 text-xs">
+                                            <span className="text-slate-200">{item.name} <span className="text-slate-500">[{item.gatewayDeviceId}]</span></span>
+                                            <span className="font-mono text-sky-200">{item.ip || 'NO IP'} · {item.role}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                         {(report.duplicateIps || []).length > 0 && (
                             <div className="space-y-2">
@@ -374,10 +424,16 @@ function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
                                             {!!item.possibleMatches?.length && (
                                                 <p className="mt-1 text-xs text-orange-300">Possible name match (NOT verified): {item.possibleMatches.map(d => d.name + ' [' + d.gatewayDeviceId + ']').join(', ')}</p>
                                             )}
+                                            {!!localDevices?.find(d => d.ip && d.ip === item.displayIp) && (
+                                                <p className="mt-1 text-xs text-orange-200" data-testid="local-ip-collision">
+                                                    WINDOWS IP CONFLICT: {localDevices.find(d => d.ip === item.displayIp)?.name} [{localDevices.find(d => d.ip === item.displayIp)?.gatewayDeviceId}] already uses {item.displayIp}. Do not register a duplicate.
+                                                </p>
+                                            )}
                                         </div>
                                         {item.type === 'card' ? (
-                                            <button type="button" onClick={() => onRegisterController(item)}
-                                                className="rounded-lg border border-sky-400/35 px-3 py-2 text-[11px] text-sky-200">
+                                            <button type="button" disabled={!!localDevices?.some(d => d.ip && d.ip === item.displayIp)}
+                                                onClick={() => onRegisterController(item)}
+                                                className="rounded-lg border border-sky-400/35 px-3 py-2 text-[11px] text-sky-200 disabled:cursor-not-allowed disabled:opacity-40">
                                                 REGISTER ONLY IF NEW AC
                                             </button>
                                         ) : (

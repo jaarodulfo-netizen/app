@@ -1202,6 +1202,9 @@ async def attendance_report(start: str, end: str, user=Depends(get_current_user)
 # --- On-premise Kerma Gateway tunnel ---
 gateway_connections: dict[str, WebSocket] = {}
 gateway_pending: dict[str, asyncio.Future] = {}
+# Only the isolated V5 AC-only agent may stage controllers. The original and
+# rolled-back Windows Gateway must never receive unsupported create commands.
+gateway_ac_only_versions: dict[str, str] = {}
 
 # Independent media WebSocket: never queue large HLS video in the door/control
 # command channel. The gateway authenticates using the same shared secret
@@ -1540,6 +1543,8 @@ async def gateway_socket(websocket: WebSocket):
             if msg_type == "register":
                 gateway_id = str(msg.get("gatewayId") or "kerma-monterrey")
                 gateway_connections[gateway_id] = websocket
+                agent_version = str(msg.get("agentVersion") or "")[:80]
+                gateway_ac_only_versions[gateway_id] = agent_version
                 logger.info("Gateway registered: %s with %s devices", gateway_id, len(msg.get("devices") or []))
                 registered_count = await register_gateway_physical_devices(
                     gateway_id, msg.get("devices") or [],
@@ -1668,6 +1673,7 @@ async def gateway_socket(websocket: WebSocket):
     finally:
         if gateway_id and gateway_connections.get(gateway_id) is websocket:
             gateway_connections.pop(gateway_id, None)
+            gateway_ac_only_versions.pop(gateway_id, None)
         if gateway_id:
             await db.devices.update_many(
                 {"gatewayId": gateway_id},
@@ -2890,6 +2896,45 @@ def classify_remote_ac_failure(exc: Exception) -> tuple:
     return ("GATEWAY_REJECTED", "Gateway rejected AC registration. Check local Gateway logs for the precise reason; existing access rights were not intentionally modified.")
 
 
+@api_router.get("/devices/gateway-local-inventory")
+async def gateway_local_inventory(user=Depends(require_commander)):
+    """Read-only live Windows configuration, not unverified cloud display IPs.
+
+    The active AC-only agent never returns passwords, credential sets or
+    hidden Gateway secrets. Existing access permissions are untouched.
+    """
+    if "kerma-monterrey" not in gateway_connections:
+        raise HTTPException(status_code=503, detail="Windows Gateway is offline")
+    if gateway_ac_only_versions.get("kerma-monterrey") != "0.5.0-ac-only":
+        raise HTTPException(
+            status_code=412,
+            detail="AC-ONLY_ADDON_REQUIRED: Windows Gateway has not loaded the isolated V5 AC-only module",
+        )
+    reported = await send_gateway_command({"kind": "device.inventory"})
+    if not isinstance(reported, list) or len(reported) > 300:
+        raise HTTPException(status_code=502, detail="Gateway did not return a valid local inventory")
+    clean = []
+    for row in reported:
+        if not isinstance(row, dict):
+            continue
+        device_id = str(row.get("id") or "")[:80]
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", device_id):
+            continue
+        ip = str(row.get("ip") or "")[:48]
+        name = str(row.get("name") or "")[:120]
+        role = str(row.get("role") or "")[:30]
+        if role not in {"controller", "face-terminal", "face", "attendance"}:
+            continue
+        clean.append({
+            "gatewayDeviceId": device_id, "name": name, "ip": ip,
+            "role": role, "enabled": row.get("enabled") is True,
+            "doors": [x for x in (row.get("doors") or [])
+                      if type(x) is int and 1 <= x <= 256][:16],
+        })
+    return {"source": "Windows Gateway config/devices.json", "readOnly": True,
+            "devices": clean, "count": len(clean)}
+
+
 @api_router.post("/devices/provision-controller")
 async def provision_access_controller(body: ControllerProvisionIn, user=Depends(require_commander)):
     """Enroll one physical controller through the authenticated outbound
@@ -2925,6 +2970,15 @@ async def provision_access_controller(body: ControllerProvisionIn, user=Depends(
         raise HTTPException(status_code=409, detail="Gateway Device ID already exists in cloud inventory")
     if await db.devices.find_one({"type": "card", "ip": body.ip.strip(), "gatewayRegistered": True}):
         raise HTTPException(status_code=409, detail="This AC IP is already registered")
+    if "kerma-monterrey" not in gateway_connections:
+        raise HTTPException(status_code=503, detail="Windows Gateway is offline. No AC changes were made.")
+    if gateway_ac_only_versions.get("kerma-monterrey") != "0.5.0-ac-only":
+        raise HTTPException(
+            status_code=412,
+            detail="AC-ONLY_ADDON_REQUIRED: Windows Gateway is using its previous stable modules. "
+                   "Install the standalone V5 AC-only module once, then reconnect Gateway. "
+                   "Existing cards and doors have not been changed.",
+        )
 
     audit = {
         "actor": user["email"], "action": "controller_remote_provision",
@@ -2945,14 +2999,20 @@ async def provision_access_controller(body: ControllerProvisionIn, user=Depends(
         })
         if not isinstance(result, dict) or not result.get("configured") or result.get("id") != device_id:
             raise HTTPException(status_code=502, detail="Gateway did not confirm local controller configuration")
+        if result.get("restartRequired") is not True or result.get("status") != "staged":
+            raise HTTPException(status_code=502, detail="Gateway did not confirm safe staged-only AC onboarding")
         await db.security_permission_audit.update_one(
             {"_id": inserted.inserted_id},
-            {"$set": {"status": "gateway_confirmed", "completedAt": datetime.now(timezone.utc)}},
+            {"$set": {"status": "staged_pending_restart", "completedAt": datetime.now(timezone.utc)}},
         )
         return {
             "ok": True, "gatewayDeviceId": device_id, "name": name,
             "doors": doors, "gatewayConfirmed": True,
-            "message": "Gateway confirmed configuration; verify physical connection and per-door access before assigning employees.",
+            "restartRequired": True, "activationStatus": "STAGED",
+            "hardwareOnlineVerified": False,
+            "message": "AC was saved to the local Windows config after SDK authentication. "
+                       "It is NOT ACTIVE yet. Restart the Gateway during a supervised maintenance period, "
+                       "then verify Gateway inventory and real door operation before granting employee access.",
         }
     except Exception as exc:
         code, safe_message = classify_remote_ac_failure(exc)
@@ -3760,7 +3820,13 @@ async def activate_emergency_release(body: EmergencyReleaseConfirmation, request
 
 @api_router.get("/gateway/status")
 async def gateway_status(user=Depends(get_current_user)):
-    return {"online": "kerma-monterrey" in gateway_connections, "gateway_id": "kerma-monterrey"}
+    connected = "kerma-monterrey" in gateway_connections
+    version = gateway_ac_only_versions.get("kerma-monterrey") if connected else None
+    return {
+        "online": connected, "gateway_id": "kerma-monterrey",
+        "acStagingReady": version == "0.5.0-ac-only",
+        "agentVersion": version,
+    }
 
 
 @api_router.post("/status", response_model=StatusCheck)
