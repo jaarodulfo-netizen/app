@@ -334,12 +334,25 @@ function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
     const [report, setReport] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [localDevices, setLocalDevices] = useState(null);
+    const [localStatus, setLocalStatus] = useState('');
 
     useEffect(() => {
         if (!open) return;
         let cancelled = false;
         setLoading(true);
         setError('');
+        setLocalDevices(null);
+        setLocalStatus('Checking actual Windows Gateway inventory…');
+        api.get('/devices/gateway-local-inventory')
+            .then(({ data }) => { if (!cancelled) { setLocalDevices(data.devices || []); setLocalStatus(''); } })
+            .catch(err => {
+                if (!cancelled) setLocalStatus(
+                    err?.response?.status === 412
+                        ? 'V5 AC-only module not installed. Actual Windows IP assignments are not available yet.'
+                        : (err?.response?.data?.detail || 'Could not reach local Gateway configuration')
+                );
+            });
         api.get('/devices/reconciliation')
             .then(({ data }) => { if (!cancelled) setReport(data); })
             .catch(err => { if (!cancelled) setError(err?.response?.data?.detail || 'Could not read reconciliation report'); })
@@ -373,7 +386,21 @@ function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
                             )}
                         </div>
                         <div className="rounded-lg border border-orange-400/25 bg-orange-400/5 px-4 py-3 text-xs text-orange-100">
-                            IPs shown in the app are cloud records, NOT verified current Gateway endpoints. Matching names or IPs never proves a physical identity. Gateway V4.1 does not remotely reconfigure existing facial IPs.
+                            Cloud IPs are display records, not verified Windows endpoints. With V5, Windows inventory is read directly without PowerShell. A duplicate IP will block creation; do not erase or rename existing doors automatically. V5 does not reconfigure existing facial IPs.
+                        </div>
+                        <div>
+                            <p className="mono text-[10px] tracking-widest text-emerald-300">LIVE WINDOWS CONFIG — READ ONLY</p>
+                            {localStatus && <p className="mt-2 text-xs text-orange-300">{localStatus}</p>}
+                            {localDevices && (
+                                <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-white/10">
+                                    {localDevices.map(item => (
+                                        <div key={item.gatewayDeviceId} className="flex flex-wrap justify-between gap-2 border-b border-white/5 px-3 py-2 text-xs">
+                                            <span className="text-slate-200">{item.name} <span className="text-slate-500">[{item.gatewayDeviceId}]</span></span>
+                                            <span className="font-mono text-sky-200">{item.ip || 'NO IP'} · {item.role}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                         {(report.duplicateIps || []).length > 0 && (
                             <div className="space-y-2">
@@ -397,10 +424,16 @@ function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
                                             {!!item.possibleMatches?.length && (
                                                 <p className="mt-1 text-xs text-orange-300">Possible name match (NOT verified): {item.possibleMatches.map(d => d.name + ' [' + d.gatewayDeviceId + ']').join(', ')}</p>
                                             )}
+                                            {!!localDevices?.find(d => d.ip && d.ip === item.displayIp) && (
+                                                <p className="mt-1 text-xs text-orange-200" data-testid="local-ip-collision">
+                                                    WINDOWS IP CONFLICT: {localDevices.find(d => d.ip === item.displayIp)?.name} [{localDevices.find(d => d.ip === item.displayIp)?.gatewayDeviceId}] already uses {item.displayIp}. Do not register a duplicate.
+                                                </p>
+                                            )}
                                         </div>
                                         {item.type === 'card' ? (
-                                            <button type="button" onClick={() => onRegisterController(item)}
-                                                className="rounded-lg border border-sky-400/35 px-3 py-2 text-[11px] text-sky-200">
+                                            <button type="button" disabled={!!localDevices?.some(d => d.ip && d.ip === item.displayIp)}
+                                                onClick={() => onRegisterController(item)}
+                                                className="rounded-lg border border-sky-400/35 px-3 py-2 text-[11px] text-sky-200 disabled:cursor-not-allowed disabled:opacity-40">
                                                 REGISTER ONLY IF NEW AC
                                             </button>
                                         ) : (
