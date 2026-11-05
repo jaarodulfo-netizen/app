@@ -30,12 +30,24 @@ class AcOnlyStagingContract(unittest.TestCase):
         self.assertIn('gateway_ac_only_versions.pop(gateway_id, None)', self.src)
         self.assertIn('acStagingReady', self.src)
 
+    def test_commander_only_live_windows_inventory(self):
+        live = next(n for n in self.tree.body if isinstance(n, ast.AsyncFunctionDef)
+                    and n.name == "gateway_local_inventory")
+        body = ast.get_source_segment(self.src, live)
+        self.assertIn('Depends(require_commander)', body)
+        self.assertIn('"kind": "device.inventory"', body)
+        self.assertIn('"readOnly": True', body)
+        self.assertNotIn('update_one(', body)
+        self.assertNotIn('insert_one(', body)
+
     def test_frontend_guards_and_staged_message(self):
         self.assertIn("data?.acStagingReady === true", self.frontend)
         self.assertIn('AC-ONLY ADD-ON NOT READY', self.frontend)
         self.assertIn('SAVE NEW AC TO GATEWAY', self.frontend)
         self.assertIn('restartRequired !== true', self.frontend)
         self.assertIn('AC SAVED — CONTROLLED GATEWAY RESTART REQUIRED', self.frontend)
+        self.assertIn('/devices/gateway-local-inventory', self.frontend)
+        self.assertIn('WINDOWS IP CONFLICT:', self.frontend)
 
 
 if __name__ == "__main__":
