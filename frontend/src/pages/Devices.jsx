@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Network, HardDrive, ScanFace, Nfc, RefreshCw, Plus, Trash2, X, Loader2, Cpu } from 'lucide-react';
+import { Network, HardDrive, ScanFace, Nfc, RefreshCw, Plus, Trash2, X, Loader2, Cpu, ShieldAlert, Link2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -56,7 +56,7 @@ function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed
     const [syncing, setSyncing] = useState(false);
     // Old manual AC rows may still have status="online" from the legacy
     // Register Device form, even though they have no physical Gateway ID.
-    const unlinkedPhysical = (device.type === 'card' || device.type === 'face') && !device.gatewayDeviceId;
+    const unlinkedPhysical = (device.type === 'card' || device.type === 'face') && (!device.gatewayDeviceId || device.gatewayRegistered !== true);
     const s = unlinkedPhysical ? STATUS.unlinked : (STATUS[device.status] || STATUS.offline);
     const sync = async () => {
         if (device.type !== 'nvr') {
@@ -98,8 +98,8 @@ function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed
             {device.detail && <p className="mono text-[9px] tracking-wider text-slate-500 mt-3 truncate">{device.detail}</p>}
             {(device.type === 'card' || device.type === 'face') && (
                 <div className="mt-3 text-[10px] text-sky-200">
-                    {device.gatewayDeviceId ? `GATEWAY ID: ${device.gatewayDeviceId} · ${(device.doors || []).length} OUTPUTS`
-                        : 'NOT LINKED TO GATEWAY — configure the physical device there and reconnect the Gateway'}
+                    {!unlinkedPhysical ? `GATEWAY ID: ${device.gatewayDeviceId} · ${(device.doors || []).length} OUTPUTS`
+                        : 'NOT LINKED — cloud inventory only; not a confirmed physical device'}
                 </div>
             )}
             <div className="mt-4 flex items-center justify-between border-t border-white/5 pt-4">
@@ -120,7 +120,7 @@ function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed
     );
 }
 
-function AddDeviceModal({ open, onClose }) {
+function AddDeviceModal({ open, onClose, initialDevice }) {
     const { addDevice, refreshPhysicalInventory } = useSecurity();
     const [type, setType] = useState('nvr');
     const [controllerId, setControllerId] = useState('');
@@ -131,9 +131,26 @@ function AddDeviceModal({ open, onClose }) {
     const [ip, setIp] = useState('');
     const [fw, setFw] = useState('');
     const [saving, setSaving] = useState(false);
+    const [confirmedNewController, setConfirmedNewController] = useState(false);
+
+    useEffect(() => {
+        if (open && initialDevice?.type === 'card') {
+            setType('card');
+            setName(initialDevice.name || '');
+            setIp(initialDevice.displayIp || initialDevice.ip || '');
+            setControllerId('');
+            setConfirmedNewController(false);
+        }
+    }, [open, initialDevice]);
 
     const submit = async (e) => {
         e.preventDefault();
+        if (type === 'card' && !confirmedNewController) {
+            toast.warning('HARDWARE IDENTITY NOT CONFIRMED', {
+                description: 'Confirm that this is a new, separate physical AC, not an existing controller with a reassigned IP.',
+            });
+            return;
+        }
         setSaving(true);
         try {
             if (type === 'card') {
@@ -157,7 +174,7 @@ function AddDeviceModal({ open, onClose }) {
                 toast.success('DEVICE REGISTERED', { description: name });
             }
             setName(''); setIp(''); setFw(''); setType('nvr');
-            setControllerId(''); setControllerDoors([1, 2, 3, 4]); setCredentialSet('A'); setSdkPort('8000');
+            setControllerId(''); setControllerDoors([1, 2, 3, 4]); setCredentialSet('A'); setSdkPort('8000'); setConfirmedNewController(false);
             onClose();
         } catch (err) {
             toast.error('REGISTER FAILED', {
@@ -253,13 +270,18 @@ function AddDeviceModal({ open, onClose }) {
                                             </label>
                                         ))}
                                     </div>
-                                    <p className="text-xs text-orange-200">No employee will automatically receive access to the new controller.</p>
+                                    <label className="flex items-start gap-2 rounded-lg border border-orange-400/30 p-2.5 text-xs text-orange-200">
+                                        <input type="checkbox" checked={confirmedNewController}
+                                            onChange={e => setConfirmedNewController(e.target.checked)}
+                                            className="mt-0.5" />
+                                        I confirm this is a NEW physical AC, not an existing controller whose IP or name changed. No employee gets access automatically.
+                                    </label>
                                 </div>
                             )}
                             {type === 'face' && (
                                 <p className="text-xs text-orange-200">Facial scanner onboarding still requires the local Gateway inventory configuration.</p>
                             )}
-                            <button data-testid="add-device-submit-btn" type="submit" disabled={saving}
+                            <button data-testid="add-device-submit-btn" type="submit" disabled={saving || (type === 'card' && (!confirmedNewController || controllerDoors.length === 0))}
                                 className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
                                     saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
                                 }`}>
@@ -274,9 +296,110 @@ function AddDeviceModal({ open, onClose }) {
     );
 }
 
+function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
+    const [report, setReport] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+
+    useEffect(() => {
+        if (!open) return;
+        let cancelled = false;
+        setLoading(true);
+        setError('');
+        api.get('/devices/reconciliation')
+            .then(({ data }) => { if (!cancelled) setReport(data); })
+            .catch(err => { if (!cancelled) setError(err?.response?.data?.detail || 'Could not read reconciliation report'); })
+            .finally(() => { if (!cancelled) setLoading(false); });
+        return () => { cancelled = true; };
+    }, [open]);
+
+    if (!open) return null;
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" data-testid="device-reconciliation-modal">
+            <div className="w-full max-w-5xl max-h-[92vh] overflow-y-auto rounded-2xl border border-sky-400/30 bg-[#0b1220] p-5 sm:p-7">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <p className="mono text-[10px] tracking-[0.25em] text-sky-400">HARDWARE IDENTITY AUDIT · READ ONLY</p>
+                        <h2 className="mt-2 text-xl font-bold text-slate-100">Reconcile Gateway Inventory</h2>
+                        <p className="mt-1 text-xs text-slate-400">Compares cloud records with device identities confirmed by the Windows Gateway. It does NOT modify IDs, IPs, cards, doors or access levels.</p>
+                    </div>
+                    <button type="button" onClick={onClose} className="rounded-full border border-white/10 p-2 text-slate-400"><X size={17} /></button>
+                </div>
+                {loading && <p className="mt-8 text-sky-300">Reading confirmed inventory…</p>}
+                {error && <p className="mt-5 text-red-300">{typeof error === 'string' ? error : 'Inventory report failed'}</p>}
+                {report && !loading && (
+                    <div className="mt-5 space-y-5">
+                        <div className="grid grid-cols-3 gap-3">
+                            {[['GATEWAY LINKED', report.summary.linked], ['PENDING LINK', report.summary.pending], ['DUPLICATE IP GROUPS', report.summary.duplicateIpGroups]].map(([label, value]) =>
+                                <div key={label} className="rounded-lg border border-white/10 bg-white/[0.03] p-3">
+                                    <div className="text-xl font-bold text-sky-200">{value}</div>
+                                    <div className="mono text-[9px] text-slate-400">{label}</div>
+                                </div>
+                            )}
+                        </div>
+                        <div className="rounded-lg border border-orange-400/25 bg-orange-400/5 px-4 py-3 text-xs text-orange-100">
+                            IPs shown in the app are cloud records, NOT verified current Gateway endpoints. Matching names or IPs never proves a physical identity. Gateway V4.1 does not remotely reconfigure existing facial IPs.
+                        </div>
+                        {(report.duplicateIps || []).length > 0 && (
+                            <div className="space-y-2">
+                                <p className="mono text-[10px] tracking-widest text-orange-300">IP ADDRESS CONFLICTS — DO NOT AUTO-LINK</p>
+                                {report.duplicateIps.map(conflict => (
+                                    <div key={conflict.displayIp} className="rounded-lg border border-orange-400/20 p-3 text-xs">
+                                        <span className="font-mono text-orange-200">{conflict.displayIp}</span>
+                                        <span className="ml-3 text-slate-300">{conflict.devices.map(d => d.name + (d.linked ? ' [Gateway]' : ' [Cloud only]')).join(' · ')}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        <div>
+                            <p className="mono text-[10px] tracking-widest text-sky-300">PENDING CLOUD RECORDS — {report.pending.length}</p>
+                            <div className="mt-2 space-y-2">
+                                {report.pending.map(item => (
+                                    <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-orange-400/20 bg-white/[0.02] px-3 py-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-200">{item.name}</p>
+                                            <p className="mono text-[10px] text-slate-400">{item.displayIp || 'NO IP'} · {item.type === 'card' ? 'ACCESS CONTROLLER' : 'FACIAL'} · NOT LINKED</p>
+                                            {!!item.possibleMatches?.length && (
+                                                <p className="mt-1 text-xs text-orange-300">Possible name match (NOT verified): {item.possibleMatches.map(d => d.name + ' [' + d.gatewayDeviceId + ']').join(', ')}</p>
+                                            )}
+                                        </div>
+                                        {item.type === 'card' ? (
+                                            <button type="button" onClick={() => onRegisterController(item)}
+                                                className="rounded-lg border border-sky-400/35 px-3 py-2 text-[11px] text-sky-200">
+                                                REGISTER ONLY IF NEW AC
+                                            </button>
+                                        ) : (
+                                            <span className="text-[11px] text-slate-400">FACIAL: REQUIRES VERIFIED HARDWARE ID</span>
+                                        )}
+                                    </div>
+                                ))}
+                                {!report.pending.length && <p className="p-3 text-xs text-emerald-200">No pending records.</p>}
+                            </div>
+                        </div>
+                        <div>
+                            <p className="mono text-[10px] tracking-widest text-emerald-300">REGISTERED BY GATEWAY — {report.linked.length}</p>
+                            <div className="mt-2 max-h-44 overflow-y-auto rounded-lg border border-white/10">
+                                {report.linked.map(item => (
+                                    <div key={item.id} className="flex justify-between gap-2 border-b border-white/5 px-3 py-2 text-xs">
+                                        <span className="text-slate-200">{item.name} <span className="text-slate-500">({item.gatewayDeviceId})</span></span>
+                                        <span className="font-mono text-slate-400">{item.displayIp || 'NO IP'} · {item.gatewayOnline ? 'GATEWAY ONLINE' : 'NOT CONFIRMED ONLINE'}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 export default function Devices() {
     const { devices, deleteDevice, refreshCameras, refreshPhysicalInventory } = useSecurity();
     const [refreshing, setRefreshing] = useState(false);
+    const [reconcileOpen, setReconcileOpen] = useState(false);
+    const [controllerToRegister, setControllerToRegister] = useState(null);
     const refreshGateway = async () => {
         setRefreshing(true);
         try {
@@ -294,7 +417,11 @@ export default function Devices() {
     };
     const [addOpen, setAddOpen] = useState(false);
     const list = devices || [];
-    const online = list.filter((d) => d.status === 'online').length;
+    const online = list.filter((d) =>
+        d.type === 'card' || d.type === 'face'
+            ? d.gatewayRegistered === true && d.gatewayOnline === true
+            : d.status === 'online'
+    ).length;
 
     const remove = async (dev) => {
         try {
@@ -322,6 +449,11 @@ export default function Devices() {
                         data-testid="refresh-gateway-inventory"
                         className="flex items-center gap-2 rounded-full border border-sky-400/30 px-4 py-2 text-xs text-sky-200 disabled:opacity-50">
                         <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} /> REFRESH INVENTORY
+                    </button>
+                    <button type="button" onClick={() => setReconcileOpen(true)}
+                        data-testid="reconcile-inventory-open"
+                        className="flex items-center gap-2 rounded-full border border-orange-400/30 px-4 py-2.5 text-xs text-orange-200">
+                        <ShieldAlert size={15} /> RECONCILE
                     </button>
                     <button
                         data-testid="add-device-open-btn"
@@ -353,7 +485,9 @@ export default function Devices() {
                                 <Meta.icon size={16} className="text-sky-400" />
                                 <h2 className="font-head font-bold tracking-[0.2em] text-slate-200 text-sm">{Meta.label}</h2>
                                 <span className="mono text-[10px] text-slate-600">
-                                    · {g.items.filter((d) => d.status === 'online').length}/{g.items.length} UP
+                                    · {g.items.filter(d => (d.type === 'card' || d.type === 'face')
+                                        ? d.gatewayRegistered === true && d.gatewayOnline === true
+                                        : d.status === 'online').length}/{g.items.length} UP
                                 </span>
                                 <div className="flex-1 h-px bg-gradient-to-r from-sky-500/25 to-transparent ml-3" />
                             </div>
