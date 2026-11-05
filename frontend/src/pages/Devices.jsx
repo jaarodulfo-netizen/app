@@ -205,7 +205,7 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
                         className="relative flex w-full max-w-md max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-2xl border border-sky-500/25 bg-[#0b1220] p-4 sm:p-6"
                     >
-                        <div className="flex items-start justify-between">
+                        <div className="flex shrink-0 items-start justify-between">
                             <div>
                                 <p className="mono text-[10px] tracking-[0.35em] text-sky-400">HARDWARE MESH</p>
                                 <h2 id="register-device-title" className="font-display text-xl font-bold text-white mt-2">Register Device</h2>
