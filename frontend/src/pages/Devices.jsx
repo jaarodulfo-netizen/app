@@ -52,7 +52,7 @@ function DeleteChip({ onConfirm, testid }) {
     );
 }
 
-function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed }) {
+function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed, onRegisterNewController }) {
     const [syncing, setSyncing] = useState(false);
     // Old manual AC rows may still have status="online" from the legacy
     // Register Device form, even though they have no physical Gateway ID.
@@ -113,6 +113,13 @@ function DeviceCard({ device, index, onDelete, onNvrSynced, onInventoryRefreshed
                         <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
                         {syncing ? 'SYNCING…' : device.type === 'nvr' ? 'SYNC NVR CHANNELS' : 'REFRESH INVENTORY'}
                     </button>
+                    {unlinkedPhysical && device.type === 'card' && (
+                        <button type="button" onClick={() => onRegisterNewController?.(device)}
+                            className="flex items-center gap-1.5 mono text-[10px] tracking-widest text-orange-300 hover:text-orange-100"
+                            data-testid={`register-new-ac-${device.id}`}>
+                            <Plus size={12} /> REGISTER IF NEW AC
+                        </button>
+                    )}
                     <DeleteChip testid={`delete-device-${device.id}`} onConfirm={() => onDelete(device)} />
                 </div>
             </div>
@@ -404,10 +411,11 @@ export default function Devices() {
         setRefreshing(true);
         try {
             const inventory = await refreshPhysicalInventory();
-            const count = inventory.devices.filter((device) =>
-                device.gatewayDeviceId && ['card', 'face'].includes(device.type)).length;
-            toast.info('GATEWAY INVENTORY REFRESHED', {
-                description: `${count} linked access devices. If the new AC is missing, enable it in Windows Gateway and reconnect that Gateway so it reports its inventory.`,
+            const physical = inventory.devices.filter(device => ['card', 'face'].includes(device.type));
+            const linked = physical.filter(device => device.gatewayRegistered === true && !!device.gatewayDeviceId);
+            const pending = physical.length - linked.length;
+            toast.info('INVENTORY VIEW REFRESHED', {
+                description: `${linked.length} Gateway-linked · ${pending} cloud records not linked. Refresh only reads inventory. For a truly NEW AC, use RECONCILE → REGISTER ONLY IF NEW AC. Existing renamed/re-IP'd devices need identity verification.`,
             });
         } catch (err) {
             toast.error('REFRESH FAILED', { description: err?.response?.data?.detail || err?.message });
@@ -493,7 +501,12 @@ export default function Devices() {
                             </div>
                             <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-5">
                                 {g.items.map((d, i) => (
-                                    <DeviceCard key={d.id} device={d} index={i} onDelete={remove} onNvrSynced={refreshCameras} onInventoryRefreshed={refreshGateway} />
+                                    <DeviceCard key={d.id} device={d} index={i} onDelete={remove} onNvrSynced={refreshCameras}
+                                        onInventoryRefreshed={refreshGateway}
+                                        onRegisterNewController={(device) => {
+                                            setControllerToRegister({ ...device, displayIp: device.ip });
+                                            setAddOpen(true);
+                                        }} />
                                 ))}
                             </div>
                         </section>
