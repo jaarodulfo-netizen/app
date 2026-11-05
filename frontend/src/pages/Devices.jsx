@@ -195,26 +195,27 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
     return (
         <AnimatePresence>
             {open && (
-                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4">
                     <div className="absolute inset-0 bg-black/75 backdrop-blur-sm" onClick={onClose} />
                     <motion.div
-                        data-testid="add-device-modal"
+                        data-testid="add-device-modal" role="dialog" aria-modal="true" aria-labelledby="register-device-title"
                         initial={{ opacity: 0, y: 24, scale: 0.97 }}
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 24 }}
                         transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-                        className="relative w-full max-w-md rounded-2xl border border-sky-500/25 bg-[#0b1220] p-6 sm:p-8"
+                        className="relative flex w-full max-w-md max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)] flex-col overflow-hidden rounded-2xl border border-sky-500/25 bg-[#0b1220] p-4 sm:p-6"
                     >
-                        <div className="flex items-start justify-between">
+                        <div className="flex shrink-0 items-start justify-between">
                             <div>
                                 <p className="mono text-[10px] tracking-[0.35em] text-sky-400">HARDWARE MESH</p>
-                                <h2 className="font-display text-xl font-bold text-white mt-2">Register Device</h2>
+                                <h2 id="register-device-title" className="font-display text-xl font-bold text-white mt-2">Register Device</h2>
                             </div>
                             <button data-testid="add-device-close-btn" onClick={onClose} className="rounded-full border border-white/10 p-2 text-slate-400 hover:bg-white/10 hover:text-white transition-colors duration-200">
                                 <X size={15} />
                             </button>
                         </div>
-                        <form onSubmit={submit} className="mt-6 space-y-4">
+                        <form onSubmit={submit} className="mt-4 flex min-h-0 flex-1 flex-col">
+                            <div data-testid="add-device-scroll-area" className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain pb-4 pr-1 touch-pan-y">
                             <div>
                                 <label className="mono text-[10px] tracking-widest text-slate-500">DEVICE TYPE</label>
                                 <select data-testid="device-type-select" value={type} onChange={(e) => setType(e.target.value)}
@@ -288,6 +289,8 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                             {type === 'face' && (
                                 <p className="text-xs text-orange-200">Facial scanner onboarding still requires the local Gateway inventory configuration.</p>
                             )}
+                            </div>
+                            <div className="shrink-0 border-t border-white/10 bg-[#0b1220] pt-3">
                             <button data-testid="add-device-submit-btn" type="submit" disabled={saving || (type === 'card' && (!confirmedNewController || controllerDoors.length === 0))}
                                 className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
                                     saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
@@ -295,6 +298,7 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                                 {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
                                 {saving ? 'REGISTERING…' : type === 'card' ? 'REGISTER AC IN GATEWAY' : 'REGISTER DEVICE'}
                             </button>
+                            </div>
                         </form>
                     </motion.div>
                 </motion.div>
