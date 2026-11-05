@@ -139,6 +139,17 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
     const [fw, setFw] = useState('');
     const [saving, setSaving] = useState(false);
     const [confirmedNewController, setConfirmedNewController] = useState(false);
+    const [acStagingReady, setAcStagingReady] = useState(null);
+
+    useEffect(() => {
+        if (!open) return;
+        let mounted = true;
+        setAcStagingReady(null);
+        api.get('/gateway/status')
+            .then(({ data }) => { if (mounted) setAcStagingReady(data?.online === true && data?.acStagingReady === true); })
+            .catch(() => { if (mounted) setAcStagingReady(false); });
+        return () => { mounted = false; };
+    }, [open]);
 
     useEffect(() => {
         if (open && initialDevice?.type === 'card') {
@@ -152,6 +163,10 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
 
     const submit = async (e) => {
         e.preventDefault();
+        if (type === 'card' && !acStagingReady) {
+            toast.error('AC-ONLY ADD-ON NOT READY', { description: 'Install and start the isolated V5 AC-only Gateway add-on first. Existing access systems were not modified.' });
+            return;
+        }
         if (type === 'card' && !confirmedNewController) {
             toast.warning('HARDWARE IDENTITY NOT CONFIRMED', {
                 description: 'Confirm that this is a new, separate physical AC, not an existing controller with a reassigned IP.',
@@ -171,10 +186,11 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                     credentialSet,
                     sdkPort: Number(sdkPort),
                 });
-                if (!data?.gatewayConfirmed) throw new Error('Gateway did not confirm configuration');
+                if (!data?.gatewayConfirmed || data?.restartRequired !== true) throw new Error('Gateway did not confirm safe staged AC configuration');
                 await refreshPhysicalInventory();
-                toast.success('AC REGISTERED THROUGH WINDOWS GATEWAY', {
-                    description: 'Configuration acknowledged. Verify the physical controller and each door before granting access.',
+                toast.warning('AC SAVED — CONTROLLED GATEWAY RESTART REQUIRED', {
+                    duration: 14000,
+                    description: 'Config backed up and SDK login verified. The new AC is NOT active yet. Restart Windows Gateway in a supervised maintenance window, then refresh inventory.',
                 });
             } else {
                 await addDevice({ type, name: name.trim(), ip: ip.trim(), fw: fw.trim(), detail: '' });
@@ -246,7 +262,14 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                             {type === 'card' && (
                                 <div className="space-y-3 rounded-xl border border-sky-400/25 bg-sky-500/[0.04] p-3">
                                     <p className="text-sm font-semibold text-sky-200">REGISTER AC DIRECTLY IN WINDOWS GATEWAY</p>
-                                    <p className="text-xs text-slate-400">No local JSON edits. Requires one-time Gateway V4 support. Uses an existing credential set stored on the Windows PC — passwords never enter Railway.</p>
+                                    <p className="text-xs text-slate-400">Add NEW ACs without editing Windows JSON: one-time isolated V5 AC-only add-on required. Your existing engine, SDK, card sync and doors are unchanged. New AC becomes active only after a supervised Gateway restart.</p>
+                                    {acStagingReady === null ? (
+                                        <p className="text-xs text-slate-400">Checking Windows AC-only staging capability…</p>
+                                    ) : acStagingReady === false ? (
+                                        <p data-testid="ac-addon-not-ready" className="rounded-lg border border-orange-400/25 p-2 text-xs text-orange-200">AC-ONLY ADD-ON NOT READY. Install V5 on the existing Windows Gateway once, restart it, then reopen this form. No provisioning request will be sent before that.</p>
+                                    ) : (
+                                        <p data-testid="ac-addon-ready" className="text-xs text-emerald-300">AC-ONLY ADD-ON READY · new AC will be staged pending supervised restart</p>
+                                    )}
                                     <div>
                                         <label className="mono text-[10px] text-slate-400">STABLE GATEWAY DEVICE ID</label>
                                         <input data-testid="ac-gateway-device-id" value={controllerId}
@@ -291,12 +314,12 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                             )}
                             </div>
                             <div className="shrink-0 border-t border-white/10 bg-[#0b1220] pt-3">
-                            <button data-testid="add-device-submit-btn" type="submit" disabled={saving || (type === 'card' && (!confirmedNewController || controllerDoors.length === 0))}
+                            <button data-testid="add-device-submit-btn" type="submit" disabled={saving || (type === 'card' && (!acStagingReady || !confirmedNewController || controllerDoors.length === 0))}
                                 className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
                                     saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
                                 }`}>
                                 {saving ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />}
-                                {saving ? 'REGISTERING…' : type === 'card' ? 'REGISTER AC IN GATEWAY' : 'REGISTER DEVICE'}
+                                {saving ? 'STAGING…' : type === 'card' ? 'SAVE NEW AC TO GATEWAY' : 'REGISTER DEVICE'}
                             </button>
                             </div>
                         </form>
