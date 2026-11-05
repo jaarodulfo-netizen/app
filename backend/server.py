@@ -2856,6 +2856,40 @@ async def preview_device_reconciliation(user=Depends(require_commander)):
     }
 
 
+def classify_remote_ac_failure(exc: Exception) -> tuple:
+    """Public-safe cause of a rejected native controller provisioning attempt.
+
+    Gateway errors are untrusted strings and may contain internal paths,
+    addresses or credentials. Only return fixed operator guidance; never
+    expose the exception message itself to the browser or audit log.
+    """
+    msg = str(exc).lower()
+    if ("credential slot" in msg or "hik_device_pass" in msg
+            or "juego de credenciales" in msg or "credential set" in msg):
+        return ("CREDENTIAL_SLOT", "Selected credential set is not configured in the Windows Gateway. Check the local slot before retrying; do not send passwords to Railway.")
+    if ("controller id already exists" in msg or "controller id already present" in msg
+            or "device already initialized" in msg):
+        return ("DUPLICATE_GATEWAY_ID", "That Gateway controller ID already exists locally. Check its identity; do not create a duplicate.")
+    if ("controller ip already exists" in msg or "ip already exists" in msg):
+        return ("DUPLICATE_GATEWAY_IP", "That IP is already assigned to another locally configured Gateway device. Check the physical device identity before changing it.")
+    if ("config has changed since" in msg or "split-brain" in msg):
+        return ("CONFIG_MISMATCH", "Gateway configuration differs from its loaded inventory. Verify the active Gateway installation and local config; do not force another registration.")
+    if ("sdk events unavailable" in msg or "event monitoring is not ready" in msg):
+        return ("SDK_MONITOR_NOT_READY", "Native SDK event monitoring is not ready. Check the existing AC monitoring before registering another controller.")
+    if ("config is missing" in msg or "config must be an array" in msg
+            or "symlinked" in msg):
+        return ("CONFIG_UNAVAILABLE", "Windows Gateway could not safely read its controller configuration. Existing devices were left unchanged.")
+    if ("invalid controller" in msg or "invalid sdk port" in msg
+            or "door outputs" in msg or "private lan" in msg):
+        return ("INVALID_DEVICE_REQUEST", "Controller settings were rejected by the Gateway. Confirm the ID, private IP, SDK port and selected door outputs.")
+    if ("login" in msg or "authentication" in msg or "net_dvr_login" in msg
+            or "sdk" in msg and ("failed" in msg or "error" in msg or "timeout" in msg)):
+        return ("SDK_LOGIN_FAILED", "Gateway could not authenticate to the AC through HCNetSDK. Check the LAN connection, SDK port and local credential set; do not assume the card/door is configured.")
+    if ("module" in msg or "unknown command" in msg or "unsupported" in msg):
+        return ("GATEWAY_CAPABILITY", "The running Gateway may not have the required remote AC module loaded. Verify its active executable and V4.1 installation.")
+    return ("GATEWAY_REJECTED", "Gateway rejected AC registration. Check local Gateway logs for the precise reason; existing access rights were not intentionally modified.")
+
+
 @api_router.post("/devices/provision-controller")
 async def provision_access_controller(body: ControllerProvisionIn, user=Depends(require_commander)):
     """Enroll one physical controller through the authenticated outbound
@@ -2921,16 +2955,17 @@ async def provision_access_controller(body: ControllerProvisionIn, user=Depends(
             "message": "Gateway confirmed configuration; verify physical connection and per-door access before assigning employees.",
         }
     except Exception as exc:
+        code, safe_message = classify_remote_ac_failure(exc)
         await db.security_permission_audit.update_one(
             {"_id": inserted.inserted_id},
             {"$set": {"status": "failed", "completedAt": datetime.now(timezone.utc),
-                      "failureType": type(exc).__name__}},
+                      "failureType": type(exc).__name__, "failureCode": code}},
         )
+        logger.warning("Remote AC provisioning declined (%s) for gateway device %s", code, device_id)
         if isinstance(exc, HTTPException):
             raise
         raise HTTPException(
-            status_code=502,
-            detail="Gateway rejected remote provisioning or does not have the V4 remote controller capability installed",
+            status_code=502, detail=f"{code}: {safe_message}",
         ) from exc
 
 
