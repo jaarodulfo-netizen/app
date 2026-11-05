@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Network, HardDrive, ScanFace, Nfc, RefreshCw, Plus, Trash2, X, Loader2, Cpu, ShieldAlert, Link2 } from 'lucide-react';
+import { Network, HardDrive, ScanFace, Nfc, RefreshCw, Plus, Trash2, X, Loader2, Cpu, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
@@ -457,7 +457,7 @@ export default function Devices() {
                     </button>
                     <button
                         data-testid="add-device-open-btn"
-                        onClick={() => setAddOpen(true)}
+                        onClick={() => { setControllerToRegister(null); setAddOpen(true); }}
                         className="flex items-center gap-2 rounded-full bg-sky-500 px-5 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] transition-colors duration-200 hover:bg-cyan-400"
                     >
                         <Plus size={15} /> ADD DEVICE
@@ -470,7 +470,7 @@ export default function Devices() {
             ) : list.length === 0 ? (
                 <button
                     data-testid="empty-devices-cta"
-                    onClick={() => setAddOpen(true)}
+                    onClick={() => { setControllerToRegister(null); setAddOpen(true); }}
                     className="flex w-full flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-sky-500/25 py-20 transition-colors duration-200 hover:border-[#ea7f2b]/50 hover:bg-[#ea7f2b]/5"
                 >
                     <Cpu size={28} className="text-sky-500/60" />
@@ -501,7 +501,14 @@ export default function Devices() {
                 })
             )}
 
-            <AddDeviceModal open={addOpen} onClose={() => setAddOpen(false)} />
+            <InventoryReconciliationModal open={reconcileOpen} onClose={() => setReconcileOpen(false)}
+                onRegisterController={(device) => {
+                    setControllerToRegister(device);
+                    setReconcileOpen(false);
+                    setAddOpen(true);
+                }} />
+            <AddDeviceModal open={addOpen} initialDevice={controllerToRegister}
+                onClose={() => { setAddOpen(false); setControllerToRegister(null); }} />
         </div>
     );
 }
