@@ -2896,6 +2896,45 @@ def classify_remote_ac_failure(exc: Exception) -> tuple:
     return ("GATEWAY_REJECTED", "Gateway rejected AC registration. Check local Gateway logs for the precise reason; existing access rights were not intentionally modified.")
 
 
+@api_router.get("/devices/gateway-local-inventory")
+async def gateway_local_inventory(user=Depends(require_commander)):
+    """Read-only live Windows configuration, not unverified cloud display IPs.
+
+    The active AC-only agent never returns passwords, credential sets or
+    hidden Gateway secrets. Existing access permissions are untouched.
+    """
+    if "kerma-monterrey" not in gateway_connections:
+        raise HTTPException(status_code=503, detail="Windows Gateway is offline")
+    if gateway_ac_only_versions.get("kerma-monterrey") != "0.5.0-ac-only":
+        raise HTTPException(
+            status_code=412,
+            detail="AC-ONLY_ADDON_REQUIRED: Windows Gateway has not loaded the isolated V5 AC-only module",
+        )
+    reported = await send_gateway_command({"kind": "device.inventory"})
+    if not isinstance(reported, list) or len(reported) > 300:
+        raise HTTPException(status_code=502, detail="Gateway did not return a valid local inventory")
+    clean = []
+    for row in reported:
+        if not isinstance(row, dict):
+            continue
+        device_id = str(row.get("id") or "")[:80]
+        if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", device_id):
+            continue
+        ip = str(row.get("ip") or "")[:48]
+        name = str(row.get("name") or "")[:120]
+        role = str(row.get("role") or "")[:30]
+        if role not in {"controller", "face-terminal", "face", "attendance"}:
+            continue
+        clean.append({
+            "gatewayDeviceId": device_id, "name": name, "ip": ip,
+            "role": role, "enabled": row.get("enabled") is True,
+            "doors": [x for x in (row.get("doors") or [])
+                      if type(x) is int and 1 <= x <= 256][:16],
+        })
+    return {"source": "Windows Gateway config/devices.json", "readOnly": True,
+            "devices": clean, "count": len(clean)}
+
+
 @api_router.post("/devices/provision-controller")
 async def provision_access_controller(body: ControllerProvisionIn, user=Depends(require_commander)):
     """Enroll one physical controller through the authenticated outbound
