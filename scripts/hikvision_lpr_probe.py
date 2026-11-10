@@ -13,6 +13,7 @@ license plates.
 """
 import argparse
 import getpass
+import xml.etree.ElementTree as ET
 from urllib.parse import urlparse
 
 import requests
@@ -52,6 +53,16 @@ def main():
                 with session.get(base + path, timeout=(4, 8), stream=True,
                                  allow_redirects=False) as response:
                     print(f"{label}: HTTP {response.status_code}")
+                    if label == "Device identity" and response.status_code == 200:
+                        try:
+                            root = ET.fromstring(response.raw.read(16384))
+                            safe_fields = {"model", "firmwareVersion", "firmwareReleasedDate"}
+                            for element in root.iter():
+                                field = element.tag.split("}")[-1]
+                                if field in safe_fields and element.text:
+                                    print(f"  {field}: {element.text.strip()[:80]}")
+                        except (ET.ParseError, ValueError):
+                            print("  Firmware metadata could not be parsed")
             except requests.RequestException as exc:
                 # Do not print request exception bodies containing URLs/headers.
                 print(f"{label}: connection error ({type(exc).__name__})")
