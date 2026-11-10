@@ -169,6 +169,8 @@ class EmployeeIn(BaseModel):
     photoPath: Optional[str] = None
     doorRights: Optional[dict] = None
     accessLevelId: Optional[str] = None
+    hasVehicle: bool = False
+    licensePlates: List[str] = Field(default_factory=list)
 
 
 class EmployeeUpdate(BaseModel):
@@ -185,6 +187,13 @@ class EmployeeUpdate(BaseModel):
     photoPath: Optional[str] = None
     doorRights: Optional[dict] = None
     accessLevelId: Optional[str] = None
+    hasVehicle: Optional[bool] = None
+    licensePlates: Optional[List[str]] = None
+
+
+class EmployeeVehicleUpdate(BaseModel):
+    hasVehicle: bool = False
+    licensePlates: List[str] = Field(default_factory=list)
 
 
 class AccessLevelIn(BaseModel):
@@ -2268,6 +2277,56 @@ async def list_offboarded_employees(
     return {"rows": rows, "total": total, "offset": offset, "limit": limit}
 
 
+# Vehicle enrollment is a cloud registry until the on-site Windows Gateway
+# has a firmware-tested LPR driver and can read back the allowlist.
+LPR_CAMERA_IP = "192.168.3.1"
+LPR_CAMERA_MODEL = "iDS-TCM403-BI"
+
+
+def normalize_license_plates(has_vehicle: bool, plates: list) -> list[str]:
+    """Canonicalize MX plate text; never treat this as camera authorization."""
+    if not isinstance(has_vehicle, bool):
+        raise HTTPException(status_code=400, detail="HAS VEHICLE must be a boolean")
+    if not isinstance(plates, list) or len(plates) > 3:
+        raise HTTPException(status_code=400, detail="Provide up to 3 vehicle plates")
+    normalized = []
+    for raw in plates:
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail="Every license plate must be text")
+        plate = re.sub(r"[\\s-]", "", raw.strip().upper())
+        if not re.fullmatch(r"[A-Z0-9]{4,12}", plate):
+            raise HTTPException(status_code=400, detail="Vehicle plates must have 4 to 12 letters or digits")
+        if plate in normalized:
+            raise HTTPException(status_code=400, detail="Duplicate license plate in the same record")
+        normalized.append(plate)
+    if has_vehicle and not normalized:
+        raise HTTPException(status_code=400, detail="At least one plate is required when HAS VEHICLE is selected")
+    if not has_vehicle and normalized:
+        raise HTTPException(status_code=400, detail="Set HAS VEHICLE before adding license plates")
+    return normalized
+
+
+async def check_license_plate_ownership(plates: list[str], *, exclude_id=None):
+    if not plates:
+        return
+    condition = {"is_active": {"$ne": False}, "licensePlates": {"$in": plates}}
+    if exclude_id is not None:
+        condition["_id"] = {"$ne": exclude_id}
+    conflict = await db.employees.find_one(condition, {"name": 1})
+    if conflict:
+        raise HTTPException(status_code=409, detail="A plate is already assigned to another active employee")
+
+
+def vehicle_registry_fields(has_vehicle: bool, plates: list[str], actor: str) -> dict:
+    return {
+        "hasVehicle": has_vehicle,
+        "licensePlates": plates,
+        "lprSyncStatus": "not_connected" if has_vehicle else "not_applicable",
+        "lprUpdatedAt": datetime.now(timezone.utc),
+        "lprUpdatedBy": actor,
+    }
+
+
 @api_router.post("/employees")
 async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     card_no = str(body.cardNo or "").strip()
@@ -2282,7 +2341,11 @@ async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     if not door_rights:
         raise HTTPException(status_code=400, detail="Select an access level with at least one access point")
 
+    plates = normalize_license_plates(body.hasVehicle, body.licensePlates)
+    await check_license_plate_ownership(plates)
+
     doc = body.model_dump()
+    doc.update(vehicle_registry_fields(body.hasVehicle, plates, user["email"]))
     doc["cardNo"] = card_no
     doc["cardNos"] = [card_no]
     doc["personId"] = None  # Server assigns a random unique Person ID.
@@ -2328,6 +2391,17 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
         raise HTTPException(status_code=409, detail="Offboarded employee cannot be updated or re-enrolled")
 
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "hasVehicle" in updates or "licensePlates" in updates:
+        has_vehicle = updates.get("hasVehicle", bool(existing.get("hasVehicle", False)))
+        plates = normalize_license_plates(
+            has_vehicle, updates.get("licensePlates", existing.get("licensePlates") or [])
+        )
+        await check_license_plate_ownership(plates, exclude_id=oid)
+        if (has_vehicle != bool(existing.get("hasVehicle", False))
+                or plates != (existing.get("licensePlates") or [])):
+            updates.update(vehicle_registry_fields(has_vehicle, plates, user["email"]))
+        else:
+            updates["hasVehicle"], updates["licensePlates"] = has_vehicle, plates
 
     # Rehired iVMS staff may lack the original device validity. An authorized
     # commander must explicitly supply a NEW date range before sync. Never
@@ -2452,6 +2526,45 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
     doc["hardwareSync"] = "queued"
     doc["hardwareQueuedAt"] = synced_at
     return doc_id(doc)
+
+
+@api_router.put("/employees/{item_id}/vehicles")
+async def update_employee_vehicles(
+    item_id: str, body: EmployeeVehicleUpdate, user=Depends(require_enrollment),
+):
+    """Edit vehicle registry independently of card/face Gateway sync.
+
+    This endpoint DOES NOT write the camera allowlist or grant vehicle access.
+    """
+    if not ObjectId.is_valid(item_id):
+        raise HTTPException(status_code=400, detail="Invalid employee ID")
+    oid = ObjectId(item_id)
+    existing = await db.employees.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if existing.get("is_active") is False:
+        raise HTTPException(status_code=409, detail="Offboarded personnel cannot enroll vehicles")
+    plates = normalize_license_plates(body.hasVehicle, body.licensePlates)
+    await check_license_plate_ownership(plates, exclude_id=oid)
+    fields = vehicle_registry_fields(body.hasVehicle, plates, user["email"])
+    result = await db.employees.update_one(
+        {"_id": oid, "is_active": {"$ne": False}}, {"$set": fields}
+    )
+    if result.matched_count != 1:
+        raise HTTPException(status_code=409, detail="Employee is no longer active")
+    return doc_id(await db.employees.find_one({"_id": oid}))
+
+
+@api_router.get("/lpr/camera")
+async def get_lpr_camera_registry_status(user=Depends(require_enrollment)):
+    """Read-only camera identity. The cloud cannot reach private 192.168.x.x IPs."""
+    return {
+        "ip": LPR_CAMERA_IP,
+        "model": LPR_CAMERA_MODEL,
+        "syncSupported": False,
+        "status": "GATEWAY INTEGRATION REQUIRED",
+        "accessGrantedByRegistry": False,
+    }
 
 
 @api_router.post("/employees/{item_id}/retry-sync")
@@ -2620,6 +2733,7 @@ async def delete_employee(item_id: str, user=Depends(require_commander)):
         "is_active": False, "offboardedAt": now, "offboardedBy": user["email"],
         "revocationId": str(inserted.inserted_id), "hardwareSync": "revocation_pending",
         "syncRequestId": None,
+        "lprSyncStatus": "removal_unverified" if employee.get("hasVehicle") else "not_applicable",
     }})
     record = await dispatch_employee_revocation(inserted.inserted_id)
     return revocation_view(record)
