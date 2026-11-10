@@ -29,7 +29,10 @@ class OffboardedRegistryStatusGuards(unittest.TestCase):
         handler = self.handler_text("list_offboarded_employees")
         self.assertIn("Depends(require_commander)", handler)
         self.assertIn('"is_active": False', handler)
-        self.assertIn('sort("offboardedAt", -1)', handler)
+        self.assertIn("Query(200, ge=1, le=500)", handler)
+        self.assertIn("count_documents", handler)
+        self.assertIn(".skip(offset).limit(limit).to_list(limit)", handler)
+        self.assertIn("timezone.utc", handler)
         self.assertNotIn("db.employees.delete", handler)
 
     def test_live_roster_is_unchanged_for_other_app_views(self):
@@ -37,7 +40,9 @@ class OffboardedRegistryStatusGuards(unittest.TestCase):
         self.assertIn('"is_active": {"$ne": False}', handler)
 
     def test_archived_rows_are_visible_and_read_only(self):
-        self.assertIn("api.get('/employees/offboarded')", self.frontend)
+        self.assertIn("api.get('/employees/offboarded', { params: { offset, limit } })", self.frontend)
+        self.assertIn("Promise.allSettled", self.frontend)
+        self.assertIn("(statusFilter === 'active' && !isOffboarded)", self.frontend)
         self.assertIn("user?.role === 'commander' ? offboardedEmployees : []", self.frontend)
         self.assertIn("DADO DE BAJA", self.frontend)
         self.assertIn("emp.offboardedAt", self.frontend)
