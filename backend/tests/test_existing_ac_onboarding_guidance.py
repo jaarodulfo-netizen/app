@@ -15,7 +15,10 @@ class ExistingAcGuidanceGuards(unittest.TestCase):
     def test_existing_ac_detection_is_read_only_and_matches_both_ip_and_id(self):
         self.assertIn("api.get('/devices/reconciliation')", DEVICE_UI)
         self.assertIn("device.displayIp?.trim() === ip.trim()", DEVICE_UI)
-        self.assertIn("device.gatewayDeviceId === controllerId.trim()", DEVICE_UI)
+        self.assertIn("device.gatewayDeviceId === effectiveControllerId", DEVICE_UI)
+        self.assertIn("const effectiveControllerId = controllerId.trim() || name.trim().toLowerCase()", DEVICE_UI)
+        self.assertIn("gatewayDeviceId: effectiveControllerId", DEVICE_UI)
+        self.assertIn("device.name?.trim().toLowerCase() === name.trim().toLowerCase()", DEVICE_UI)
         self.assertIn("existingCloudControllers.length > 0", DEVICE_UI)
         self.assertIn("EXISTING ACCESS CONTROLLER FOUND", DEVICE_UI)
 
