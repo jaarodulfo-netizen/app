@@ -2293,7 +2293,7 @@ def normalize_license_plates(has_vehicle: bool, plates: list) -> list[str]:
     for raw in plates:
         if not isinstance(raw, str):
             raise HTTPException(status_code=400, detail="Every license plate must be text")
-        plate = re.sub(r"[\\s-]", "", raw.strip().upper())
+        plate = re.sub(r"[\s-]", "", raw.strip().upper())
         if not re.fullmatch(r"[A-Z0-9]{4,12}", plate):
             raise HTTPException(status_code=400, detail="Vehicle plates must have 4 to 12 letters or digits")
         if plate in normalized:
