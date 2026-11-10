@@ -164,9 +164,15 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
         return () => { active = false; };
     }, [open, type]);
 
+    // Match the same effective ID the server will receive. An optional blank
+    // ID still generates a stable ID from the name, which may already exist.
+    const effectiveControllerId = controllerId.trim() || name.trim().toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '').slice(0, 80);
     const existingCloudControllers = (controllerInventory || []).filter(device =>
         (ip.trim() && device.displayIp?.trim() === ip.trim()) ||
-        (controllerId.trim() && device.gatewayDeviceId === controllerId.trim())
+        (effectiveControllerId && device.gatewayDeviceId === effectiveControllerId) ||
+        (name.trim() && device.name?.trim().toLowerCase() === name.trim().toLowerCase())
     );
 
     useEffect(() => {
@@ -216,9 +222,7 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
             if (type === 'card') {
                 const { data } = await api.post('/devices/provision-controller', {
                     name: name.trim(),
-                    gatewayDeviceId: controllerId.trim() || name.trim().toLowerCase()
-                        .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-')
-                        .replace(/^-|-$/g, '').slice(0, 80),
+                    gatewayDeviceId: effectiveControllerId,
                     ip: ip.trim(),
                     doors: controllerDoors,
                     credentialSet,
