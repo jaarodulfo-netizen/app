@@ -403,8 +403,10 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
 // Read-only site inventory audit. iVMS screenshot metadata is not a verified
 // Gateway identity, cannot grant rights and must not rewrite Windows device IPs.
 function IvmsControllerSnapshot({ report, localDevices }) {
-    const cloudControllers = [...(report?.linked || []), ...(report?.pending || [])]
-        .filter(device => device.type === 'card');
+    // Include every physical cloud class when testing IP collisions, not
+    // only card controllers (a facial terminal may display the same IP).
+    const cloudPhysicalDevices = [...(report?.linked || []), ...(report?.pending || [])];
+    const cloudControllers = cloudPhysicalDevices.filter(device => device.type === 'card');
     const folded = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
     return (
@@ -431,23 +433,27 @@ function IvmsControllerSnapshot({ report, localDevices }) {
                     </thead>
                     <tbody>
                         {IVMS_ACCESS_DEVICES.map(item => {
-                            const ipMatches = cloudControllers.filter(d => d.displayIp === item.ip);
+                            const ipMatches = cloudPhysicalDevices.filter(d => d.displayIp === item.ip);
                             const nameHints = cloudControllers.filter(d =>
                                 folded(d.name) === folded(item.name) ||
                                 item.previousCloudNames.some(alias => folded(d.name) === folded(alias)));
-                            const cloudMatch = ipMatches.length === 1 ? ipMatches[0] : null;
+                            const cloudMatch = ipMatches.length === 1 && ipMatches[0].type === 'card' ? ipMatches[0] : null;
                             const legacyHint = ipMatches.length === 0 && nameHints.length === 1 ? nameHints[0] : null;
                             const windows = localDevices?.filter(d => d.ip === item.ip) || [];
                             const windowsMatch = windows.length === 1 ? windows[0] : null;
                             const cloudStatus = item.kind === 'door-station'
                                 ? 'NOT A DS-K2804 AC'
                                 : ipMatches.length > 1 ? 'DUPLICATE CLOUD IP — REVIEW'
+                                : ipMatches.length === 1 && ipMatches[0].type !== 'card' ? 'CLOUD TYPE CONFLICT — REVIEW'
                                 : cloudMatch ? (cloudMatch.linked ? 'CLOUD LINKED · VERIFY GATEWAY IP' : 'CLOUD ONLY · NOT LINKED')
                                 : legacyHint ? `POSSIBLE OLD RECORD · ${legacyHint.displayIp || 'NO IP'}`
                                 : 'NO MATCHING CLOUD IP';
                             const windowsStatus = !localDevices
                                 ? 'LOCAL CONFIG UNAVAILABLE'
                                 : windows.length > 1 ? 'DUPLICATE LOCAL IP'
+                                : windowsMatch && item.kind === 'controller' && windowsMatch.role !== 'controller'
+                                    ? `WRONG LOCAL DEVICE TYPE: ${windowsMatch.role} [${windowsMatch.gatewayDeviceId}]`
+                                : item.kind === 'door-station' ? 'DOOR STATION — NOT 4-DOOR AC'
                                 : windowsMatch ? `${windowsMatch.gatewayDeviceId} · ${windowsMatch.enabled ? 'CONFIGURED' : 'DISABLED'}`
                                 : 'NOT IN LOCAL CONFIG';
                             return (
