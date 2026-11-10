@@ -13,6 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError, OperationFailure
 import os
 import logging
 import uuid
@@ -169,6 +170,8 @@ class EmployeeIn(BaseModel):
     photoPath: Optional[str] = None
     doorRights: Optional[dict] = None
     accessLevelId: Optional[str] = None
+    hasVehicle: bool = False
+    licensePlates: List[str] = Field(default_factory=list)
 
 
 class EmployeeUpdate(BaseModel):
@@ -185,6 +188,13 @@ class EmployeeUpdate(BaseModel):
     photoPath: Optional[str] = None
     doorRights: Optional[dict] = None
     accessLevelId: Optional[str] = None
+    hasVehicle: Optional[bool] = None
+    licensePlates: Optional[List[str]] = None
+
+
+class EmployeeVehicleUpdate(BaseModel):
+    hasVehicle: bool = False
+    licensePlates: List[str] = Field(default_factory=list)
 
 
 class AccessLevelIn(BaseModel):
@@ -2268,6 +2278,75 @@ async def list_offboarded_employees(
     return {"rows": rows, "total": total, "offset": offset, "limit": limit}
 
 
+# Vehicle enrollment is a cloud registry until the on-site Windows Gateway
+# has a firmware-tested LPR driver and can read back the allowlist.
+LPR_CAMERA_IP = "192.168.3.1"
+LPR_CAMERA_MODEL = "iDS-TCM403-BI"
+
+
+def normalize_license_plates(has_vehicle: bool, plates: list) -> list[str]:
+    """Canonicalize MX plate text; never treat this as camera authorization."""
+    if not isinstance(has_vehicle, bool):
+        raise HTTPException(status_code=400, detail="HAS VEHICLE must be a boolean")
+    if not isinstance(plates, list) or len(plates) > 3:
+        raise HTTPException(status_code=400, detail="Provide up to 3 vehicle plates")
+    normalized = []
+    for raw in plates:
+        if not isinstance(raw, str):
+            raise HTTPException(status_code=400, detail="Every license plate must be text")
+        plate = re.sub(r"[\s-]", "", raw.strip().upper())
+        if not re.fullmatch(r"[A-Z0-9]{4,12}", plate):
+            raise HTTPException(status_code=400, detail="Vehicle plates must have 4 to 12 letters or digits")
+        if plate in normalized:
+            raise HTTPException(status_code=400, detail="Duplicate license plate in the same record")
+        normalized.append(plate)
+    if has_vehicle and not normalized:
+        raise HTTPException(status_code=400, detail="At least one plate is required when HAS VEHICLE is selected")
+    if not has_vehicle and normalized:
+        raise HTTPException(status_code=400, detail="Set HAS VEHICLE before adding license plates")
+    return normalized
+
+
+async def check_license_plate_ownership(plates: list[str], *, exclude_id=None):
+    if not plates:
+        return
+    # A MongoDB unique multikey index is the authoritative concurrency guard.
+    # The partial filter excludes all legacy records and users without vehicles.
+    # Offboarded vehicle plates remain reserved until physical removal is reviewed.
+    try:
+        await db.employees.create_index(
+            [("licensePlates", 1)],
+            unique=True,
+            name="uq_employee_vehicle_license_plates",
+            partialFilterExpression={"hasVehicle": True},
+        )
+    except OperationFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Plate uniqueness protection is unavailable; registration blocked"
+        ) from exc
+    condition = {"hasVehicle": True, "licensePlates": {"$in": plates}}
+    if exclude_id is not None:
+        condition["_id"] = {"$ne": exclude_id}
+    conflict = await db.employees.find_one(condition, {"is_active": 1})
+    if conflict:
+        detail = (
+            "Plate retained by offboarded personnel; physical camera removal must be reviewed"
+            if conflict.get("is_active") is False
+            else "A plate is already assigned to another employee"
+        )
+        raise HTTPException(status_code=409, detail=detail)
+
+
+def vehicle_registry_fields(has_vehicle: bool, plates: list[str], actor: str) -> dict:
+    return {
+        "hasVehicle": has_vehicle,
+        "licensePlates": plates,
+        "lprSyncStatus": "not_connected" if has_vehicle else "not_applicable",
+        "lprUpdatedAt": datetime.now(timezone.utc),
+        "lprUpdatedBy": actor,
+    }
+
+
 @api_router.post("/employees")
 async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     card_no = str(body.cardNo or "").strip()
@@ -2282,7 +2361,11 @@ async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     if not door_rights:
         raise HTTPException(status_code=400, detail="Select an access level with at least one access point")
 
+    plates = normalize_license_plates(body.hasVehicle, body.licensePlates)
+    await check_license_plate_ownership(plates)
+
     doc = body.model_dump()
+    doc.update(vehicle_registry_fields(body.hasVehicle, plates, user["email"]))
     doc["cardNo"] = card_no
     doc["cardNos"] = [card_no]
     doc["personId"] = None  # Server assigns a random unique Person ID.
@@ -2295,7 +2378,10 @@ async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     doc["created_at"] = datetime.now(timezone.utc)
     doc["created_by"] = user["email"]
     doc["hardwareSync"] = "pending"
-    r = await db.employees.insert_one(doc)
+    try:
+        r = await db.employees.insert_one(doc)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Duplicate plate or employee identity") from exc
     doc["_id"] = r.inserted_id
 
     try:
@@ -2328,6 +2414,17 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
         raise HTTPException(status_code=409, detail="Offboarded employee cannot be updated or re-enrolled")
 
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "hasVehicle" in updates or "licensePlates" in updates:
+        has_vehicle = updates.get("hasVehicle", bool(existing.get("hasVehicle", False)))
+        plates = normalize_license_plates(
+            has_vehicle, updates.get("licensePlates", existing.get("licensePlates") or [])
+        )
+        await check_license_plate_ownership(plates, exclude_id=oid)
+        if (has_vehicle != bool(existing.get("hasVehicle", False))
+                or plates != (existing.get("licensePlates") or [])):
+            updates.update(vehicle_registry_fields(has_vehicle, plates, user["email"]))
+        else:
+            updates["hasVehicle"], updates["licensePlates"] = has_vehicle, plates
 
     # Rehired iVMS staff may lack the original device validity. An authorized
     # commander must explicitly supply a NEW date range before sync. Never
@@ -2431,7 +2528,10 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
     updates["updated_at"] = datetime.now(timezone.utc)
     updates["updated_by"] = user["email"]
     updates["hardwareSync"] = "pending"
-    await db.employees.update_one({"_id": oid}, {"$set": updates})
+    try:
+        await db.employees.update_one({"_id": oid}, {"$set": updates})
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Duplicate license plate or employee identity") from exc
     doc = await db.employees.find_one({"_id": oid})
 
     try:
@@ -2452,6 +2552,78 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
     doc["hardwareSync"] = "queued"
     doc["hardwareQueuedAt"] = synced_at
     return doc_id(doc)
+
+
+@api_router.put("/employees/{item_id}/vehicles")
+async def update_employee_vehicles(
+    item_id: str, body: EmployeeVehicleUpdate, user=Depends(require_enrollment),
+):
+    """Edit vehicle registry independently of card/face Gateway sync.
+
+    This endpoint DOES NOT write the camera allowlist or grant vehicle access.
+    """
+    if not ObjectId.is_valid(item_id):
+        raise HTTPException(status_code=400, detail="Invalid employee ID")
+    oid = ObjectId(item_id)
+    existing = await db.employees.find_one({"_id": oid})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    if existing.get("is_active") is False:
+        raise HTTPException(status_code=409, detail="Offboarded personnel cannot enroll vehicles")
+    plates = normalize_license_plates(body.hasVehicle, body.licensePlates)
+    await check_license_plate_ownership(plates, exclude_id=oid)
+    fields = vehicle_registry_fields(body.hasVehicle, plates, user["email"])
+    try:
+        result = await db.employees.update_one(
+            {"_id": oid, "is_active": {"$ne": False}}, {"$set": fields}
+        )
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="License plate belongs to another employee") from exc
+    if result.matched_count != 1:
+        raise HTTPException(status_code=409, detail="Employee is no longer active")
+    return doc_id(await db.employees.find_one({"_id": oid}))
+
+
+@api_router.get("/lpr/camera")
+async def get_lpr_camera_registry_status(user=Depends(require_enrollment)):
+    """Read-only camera identity. The cloud cannot reach private 192.168.x.x IPs."""
+    return {
+        "ip": LPR_CAMERA_IP,
+        "model": LPR_CAMERA_MODEL,
+        "syncSupported": False,
+        "status": "GATEWAY INTEGRATION REQUIRED",
+        "accessGrantedByRegistry": False,
+    }
+
+
+@api_router.get("/lpr/gateway-registry")
+async def get_lpr_gateway_plate_registry(request: Request):
+    """Authenticated read-only plate candidates for a future local LPR adapter.
+
+    This endpoint does not issue camera allowlist writes or grant barrier access.
+    It is restricted to the on-site Gateway API key, not public user sessions.
+    """
+    gateway_auth(request)
+    records = db.employees.find({
+        "is_active": {"$ne": False},
+        "hasVehicle": True,
+        "licensePlates": {"$exists": True},
+    })
+    entries = []
+    async for employee in records:
+        for plate in employee.get("licensePlates") or []:
+            entries.append({
+                "plate": plate,
+                "employeeId": str(employee["_id"]),
+                "personId": str(employee.get("personId") or ""),
+            })
+    return {
+        "cameraIp": LPR_CAMERA_IP,
+        "cameraModel": LPR_CAMERA_MODEL,
+        "status": "REGISTRY_ONLY",
+        "cameraSyncEnabled": False,
+        "entries": entries,
+    }
 
 
 @api_router.post("/employees/{item_id}/retry-sync")
@@ -2620,6 +2792,7 @@ async def delete_employee(item_id: str, user=Depends(require_commander)):
         "is_active": False, "offboardedAt": now, "offboardedBy": user["email"],
         "revocationId": str(inserted.inserted_id), "hardwareSync": "revocation_pending",
         "syncRequestId": None,
+        "lprSyncStatus": "removal_unverified" if employee.get("hasVehicle") else "not_applicable",
     }})
     record = await dispatch_employee_revocation(inserted.inserted_id)
     return revocation_view(record)
