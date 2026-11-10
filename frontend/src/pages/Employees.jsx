@@ -29,12 +29,13 @@ function DeleteButton({ onConfirm, testid }) {
         <button
             data-testid={testid}
             onClick={() => (armed ? onConfirm() : setArmed(true))}
+            title="Offboard / revoke all access. Sends deletion to all access devices; hardware verification is still required."
             className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 mono text-[9px] tracking-widest transition-colors duration-200 ${
                 armed ? 'border-red-500/60 bg-red-500/15 text-red-300' : 'border-white/10 text-slate-500 hover:text-red-300 hover:border-red-400/40'
             }`}
         >
             <Trash2 size={12} />
-            {armed ? 'CONFIRM OFFBOARD' : 'OFFBOARD'}
+            {armed ? 'CONFIRM BAJA' : 'OFFBOARD / REVOKE'}
         </button>
     );
 }
@@ -1012,13 +1013,19 @@ export default function Employees() {
     const [faceFilter, setFaceFilter] = useState('all');
     const [levelFilter, setLevelFilter] = useState('all');
     const [revocations, setRevocations] = useState([]);
+    const [offboardedEmployees, setOffboardedEmployees] = useState([]);
+    const [statusFilter, setStatusFilter] = useState('all');
     const [retryingRevocation, setRetryingRevocation] = useState(null);
 
     const loadRevocations = useCallback(async () => {
         if (user?.role !== 'commander') return;
         try {
-            const { data } = await api.get('/employees/revocations');
-            setRevocations(data || []);
+            const [revocationsResponse, archivedResponse] = await Promise.all([
+                api.get('/employees/revocations'),
+                api.get('/employees/offboarded'),
+            ]);
+            setRevocations(revocationsResponse.data || []);
+            setOffboardedEmployees(archivedResponse.data || []);
         } catch {
             toast.error('REVOCATION STATUS UNAVAILABLE');
         }
@@ -1040,7 +1047,13 @@ export default function Employees() {
         }
     };
 
-    const filteredEmployees = (employees || []).filter((emp) => {
+    // Keep the shared live roster untouched; archived records are only visible
+    // on this commander's Personnel page and cannot be edited or re-synced.
+    const personnelRecords = [
+        ...(employees || []),
+        ...(user?.role === 'commander' ? offboardedEmployees : []),
+    ];
+    const filteredEmployees = personnelRecords.filter((emp) => {
         const cards = emp.cardNos?.length ? emp.cardNos : (emp.cardNo ? [emp.cardNo] : []);
         const haystack = [
             emp.name,
@@ -1056,7 +1069,13 @@ export default function Employees() {
             (faceFilter === 'synced' && emp.faceSync) ||
             (faceFilter === 'pending' && !emp.faceSync);
         const matchesLevel = levelFilter === 'all' || emp.level === levelFilter;
-        return matchesQuery && matchesFace && matchesLevel;
+        const isOffboarded = emp.is_active === false;
+        const noAssignedRights = !isOffboarded && Object.keys(emp.doorRights || {}).length === 0;
+        const matchesStatus = statusFilter === 'all' ||
+            (statusFilter === 'offboarded' && isOffboarded) ||
+            (statusFilter === 'no_permissions' && noAssignedRights) ||
+            (statusFilter === 'active' && !isOffboarded && !noAssignedRights);
+        return matchesQuery && matchesFace && matchesLevel && matchesStatus;
     });
 
     const retryHardwareSync = async (emp) => {
@@ -1102,7 +1121,7 @@ export default function Employees() {
 
     return (
         <div className="space-y-6" data-testid="employees-page">
-            <PageHeader eyebrow={`PERSONNEL REGISTRY // ${employees ? `${employees.length} ACTIVE CREDENTIALS` : 'SYNCING…'}`} title="Employee Enrollment">
+            <PageHeader eyebrow={`PERSONNEL REGISTRY // ${employees ? `${employees.length} ACTIVE · ${offboardedEmployees.length} OFFBOARDED` : 'SYNCING…'}`} title="Employee Enrollment">
                 <div className="flex flex-wrap gap-2">
                     <button
                         onClick={() => setAccessLevelsOpen(true)}
@@ -1157,11 +1176,22 @@ export default function Employees() {
                             <option>L3 · RESTRICTED</option>
                             <option>L4 · COMMAND</option>
                         </select>
+                        <select
+                            value={statusFilter}
+                            onChange={(e) => setStatusFilter(e.target.value)}
+                            className="rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2.5 text-xs text-slate-200 focus:outline-none focus:border-sky-400/60"
+                            data-testid="personnel-status-filter"
+                        >
+                            <option value="all">ALL PERSONNEL STATUS</option>
+                            <option value="active">ACTIVE</option>
+                            <option value="no_permissions">NO DOOR RIGHTS (CLOUD)</option>
+                            {user?.role === 'commander' && <option value="offboarded">DADO DE BAJA</option>}
+                        </select>
                     </div>
                 </div>
                 <div className="mt-3 flex items-center gap-2 mono text-[10px] tracking-widest text-slate-600">
                     <Filter size={12} />
-                    SHOWING {filteredEmployees.length} OF {employees?.length || 0} PEOPLE
+                    SHOWING {filteredEmployees.length} OF {personnelRecords.length} PEOPLE
                 </div>
             </div>
 
@@ -1205,7 +1235,7 @@ export default function Employees() {
             )}
             {employees === null ? (
                 <p className="mono text-xs tracking-widest text-slate-600 py-16 text-center">LOADING REGISTRY…</p>
-            ) : employees.length === 0 ? (
+            ) : personnelRecords.length === 0 ? (
                 <button
                     data-testid="empty-employees-cta"
                     onClick={() => setOpen(true)}
@@ -1217,10 +1247,11 @@ export default function Employees() {
             ) : (
                 <div className="overflow-hidden rounded-xl border border-sky-500/15 bg-[#09101d]/90">
                     <div className="overflow-x-auto">
-                        <table className="w-full min-w-[1100px] text-left">
+                        <table className="w-full min-w-[1250px] text-left">
                             <thead className="border-b border-white/5 bg-white/[0.02]">
                                 <tr className="mono text-[9px] tracking-widest text-slate-600">
                                     <th className="px-4 py-3 font-medium">PERSON</th>
+                                    <th className="px-4 py-3 font-medium">STATUS</th>
                                     <th className="px-4 py-3 font-medium">PERSON ID</th>
                                     <th className="px-4 py-3 font-medium">CARD NO.</th>
                                     <th className="px-4 py-3 font-medium">ROLE</th>
@@ -1241,7 +1272,7 @@ export default function Employees() {
                                             initial={{ opacity: 0 }}
                                             animate={{ opacity: 1 }}
                                             transition={{ delay: Math.min(i * 0.015, 0.25) }}
-                                            className="border-b border-white/[0.04] last:border-0 hover:bg-white/[0.025]"
+                                            className={`border-b border-white/[0.04] last:border-0 hover:bg-white/[0.025] ${emp.is_active === false ? 'bg-slate-500/[0.035]' : ''}`}
                                         >
                                             <td className="px-4 py-3.5">
                                                 <div className="flex items-center gap-3">
@@ -1254,6 +1285,21 @@ export default function Employees() {
                                                     </div>
                                                 </div>
                                             </td>
+                                            <td className="px-4 py-3.5">
+                                                {emp.is_active === false ? (
+                                                    <div className="flex flex-col items-start gap-1">
+                                                        <span data-testid={`employee-offboarded-${emp.id}`} className="mono rounded border border-red-400/40 bg-red-400/10 px-2 py-1 text-[9px] font-semibold tracking-wider text-red-300">DADO DE BAJA</span>
+                                                        <span className="text-[10px] text-slate-400">
+                                                            {emp.offboardedAt ? new Date(emp.offboardedAt).toLocaleString('es-MX', { timeZone: 'America/Monterrey', dateStyle: 'short', timeStyle: 'short' }) : 'FECHA NO DISPONIBLE'}
+                                                        </span>
+                                                        {emp.offboardedBy && <span className="text-[9px] text-slate-500">BY {emp.offboardedBy}</span>}
+                                                    </div>
+                                                ) : Object.keys(emp.doorRights || {}).length === 0 ? (
+                                                    <span className="mono rounded border border-orange-400/40 bg-orange-400/10 px-2 py-1 text-[9px] tracking-wider text-orange-300">SIN PERMISOS · NUBE</span>
+                                                ) : (
+                                                    <span className="mono rounded border border-emerald-400/20 bg-emerald-400/5 px-2 py-1 text-[9px] tracking-wider text-emerald-300">ACTIVE</span>
+                                                )}
+                                            </td>
                                             <td className="px-4 py-3.5 mono text-xs text-slate-400">{emp.personId || '—'}</td>
                                             <td className="px-4 py-3.5">
                                                 <div className="flex flex-wrap gap-1.5 max-w-[280px]">
@@ -1264,6 +1310,14 @@ export default function Employees() {
                                             </td>
                                             <td className="px-4 py-3.5 text-xs text-slate-400">{emp.role || '—'}</td>
                                             <td className="px-4 py-3.5">
+                                                {emp.is_active === false ? (
+                                                    <div className="flex flex-col gap-1">
+                                                        <span className="mono text-[10px] tracking-wider text-orange-300">
+                                                            {emp.hardwareSync === 'revocation_queued' ? 'REMOVAL QUEUED' : 'REMOVAL PENDING'}
+                                                        </span>
+                                                        <span className="text-[9px] text-orange-200">HARDWARE UNVERIFIED</span>
+                                                    </div>
+                                                ) : (<>
                                                 <button type="button" onClick={() => setSyncViewId(syncViewId === emp.id ? null : emp.id)}
                                                     title="Show physical card verification by controller" className="text-left">
                                                     <span className={`mono text-[10px] tracking-wider ${targets.length > 0 && synced.length === targets.length ? 'text-emerald-300' : 'text-orange-300'}`}>
@@ -1283,6 +1337,7 @@ export default function Employees() {
                                                             className="text-[10px] text-sky-300 underline">REFRESH STATUS</button>
                                                     </div>
                                                 )}
+                                                </>)}
                                             </td>
                                             <td className="px-4 py-3.5">
                                                 <span className="mono rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1 text-[9px] tracking-wider text-sky-300">{emp.level || '—'}</span>
@@ -1291,11 +1346,14 @@ export default function Employees() {
                                                 <span className={`mono rounded border px-2 py-1 text-[9px] tracking-wider ${
                                                     'border-orange-400/30 bg-orange-400/10 text-orange-300'
                                                 }`}>
-                                                    {emp.photoPath ? 'FACE NOT VERIFIED' : 'NO PHOTO IN V2'}
+                                                    {emp.is_active === false ? 'REMOVAL NOT VERIFIED' : (emp.photoPath ? 'FACE NOT VERIFIED' : 'NO PHOTO IN V2')}
                                                 </span>
                                             </td>
                                             <td className="px-4 py-3.5">
                                                 <div className="flex justify-end gap-2">
+                                                    {emp.is_active === false ? (
+                                                        <span className="mono text-[9px] tracking-wider text-slate-500">ARCHIVED · READ ONLY</span>
+                                                    ) : (<>
                                                     {cards.length > 0 && (
                                                         <button
                                                             onClick={() => {
@@ -1328,7 +1386,8 @@ export default function Employees() {
                                                     >
                                                         <Pencil size={12} /> EDIT
                                                     </button>
-                                                    <DeleteButton testid={`delete-employee-${emp.id}`} onConfirm={() => remove(emp)} />
+                                                    {user?.role === 'commander' && <DeleteButton testid={`delete-employee-${emp.id}`} onConfirm={() => remove(emp)} />}
+                                                    </>)}
                                                 </div>
                                             </td>
                                         </motion.tr>
@@ -1336,7 +1395,7 @@ export default function Employees() {
                                 })}
                                 {filteredEmployees.length === 0 && (
                                     <tr>
-                                        <td colSpan="8" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
+                                        <td colSpan="9" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">
                                             NO ENROLLMENTS MATCH THE CURRENT FILTERS
                                         </td>
                                     </tr>
