@@ -1019,15 +1019,34 @@ export default function Employees() {
 
     const loadRevocations = useCallback(async () => {
         if (user?.role !== 'commander') return;
-        try {
-            const [revocationsResponse, archivedResponse] = await Promise.all([
-                api.get('/employees/revocations'),
-                api.get('/employees/offboarded'),
-            ]);
-            setRevocations(revocationsResponse.data || []);
-            setOffboardedEmployees(archivedResponse.data || []);
-        } catch {
+        // Independent results: an archived-roster outage must not hide new
+        // revocation queue updates from the security operator.
+        const loadHistory = async () => {
+            const all = [];
+            let offset = 0;
+            const limit = 200;
+            for (;;) {
+                const { data } = await api.get('/employees/offboarded', { params: { offset, limit } });
+                const rows = Array.isArray(data?.rows) ? data.rows : [];
+                all.push(...rows);
+                offset += rows.length;
+                if (rows.length === 0 || offset >= data.total) break;
+            }
+            return all;
+        };
+        const [revocationResult, historyResult] = await Promise.allSettled([
+            api.get('/employees/revocations'),
+            loadHistory(),
+        ]);
+        if (revocationResult.status === 'fulfilled') {
+            setRevocations(revocationResult.value.data || []);
+        } else {
             toast.error('REVOCATION STATUS UNAVAILABLE');
+        }
+        if (historyResult.status === 'fulfilled') {
+            setOffboardedEmployees(historyResult.value);
+        } else {
+            toast.error('OFFBOARDED PERSONNEL UNAVAILABLE');
         }
     }, [user?.role]);
 
@@ -1074,7 +1093,7 @@ export default function Employees() {
         const matchesStatus = statusFilter === 'all' ||
             (statusFilter === 'offboarded' && isOffboarded) ||
             (statusFilter === 'no_permissions' && noAssignedRights) ||
-            (statusFilter === 'active' && !isOffboarded && !noAssignedRights);
+            (statusFilter === 'active' && !isOffboarded);
         return matchesQuery && matchesFace && matchesLevel && matchesStatus;
     });
 
