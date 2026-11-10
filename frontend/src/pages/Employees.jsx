@@ -1098,7 +1098,11 @@ export default function Employees() {
     const { employees, devices, deleteEmployee, refreshEmployees } = useSecurity();
     const { user } = useAuth();
     const [open, setOpen] = useState(false);
-    const [accessLevelsOpen, setAccessLevelsOpen] = useState(false);
+    // Existing controller workflow can link here directly from Access Devices.
+    // This opens the current Access Levels dialog; it does not grant new rights.
+    const [accessLevelsOpen, setAccessLevelsOpen] = useState(
+        () => new URLSearchParams(window.location.search).get('accessLevels') === '1'
+    );
     const [editing, setEditing] = useState(null);
     const [retryingId, setRetryingId] = useState(null);
     const [syncViewId, setSyncViewId] = useState(null);
