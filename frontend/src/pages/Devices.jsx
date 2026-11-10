@@ -678,6 +678,15 @@ export default function Devices() {
                 </div>
             </PageHeader>
 
+            <div className="rounded-xl border border-orange-400/20 bg-orange-400/[0.035] px-4 py-3 text-xs text-slate-300"
+                data-testid="device-reip-reference-notice">
+                The studio's AC IPs changed. Older cloud device cards can still display the previous addresses.
+                Open <button type="button" onClick={() => setReconcileOpen(true)}
+                    className="font-semibold text-sky-300 underline underline-offset-2">RECONCILE</button>
+                {' '}to compare all 7 updated iVMS controller IPs and the 2 separate door stations.
+                This comparison does not write to the local Gateway or change employee permissions.
+            </div>
+
             {devices === null ? (
                 <p className="mono text-xs tracking-widest text-slate-600 py-16 text-center">SCANNING HARDWARE MESH…</p>
             ) : list.length === 0 ? (
