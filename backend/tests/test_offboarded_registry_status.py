@@ -44,7 +44,7 @@ class OffboardedRegistryStatusGuards(unittest.TestCase):
         self.assertIn("Promise.allSettled", self.frontend)
         self.assertIn("(statusFilter === 'active' && !isOffboarded)", self.frontend)
         self.assertIn("user?.role === 'commander' ? offboardedEmployees : []", self.frontend)
-        self.assertIn("DADO DE BAJA", self.frontend)
+        self.assertIn("OFFBOARDED", self.frontend)
         self.assertIn("emp.offboardedAt", self.frontend)
         self.assertIn("emp.offboardedBy", self.frontend)
         self.assertIn("ARCHIVED · READ ONLY", self.frontend)
