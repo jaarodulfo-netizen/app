@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Network, HardDrive, ScanFace, Nfc, RefreshCw, Plus, Trash2, X, Loader2, Cpu, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
@@ -140,6 +141,33 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
     const [saving, setSaving] = useState(false);
     const [confirmedNewController, setConfirmedNewController] = useState(false);
     const [acStagingReady, setAcStagingReady] = useState(null);
+    const [controllerInventory, setControllerInventory] = useState(null);
+    const [inventoryError, setInventoryError] = useState('');
+
+    useEffect(() => {
+        if (!open || type !== 'card') return;
+        let active = true;
+        setControllerInventory(null);
+        setInventoryError('');
+        // Use the read-only cloud inventory before offering a NEW controller
+        // registration. Cloud IPs are display metadata, not proof of LAN identity.
+        api.get('/devices/reconciliation')
+            .then(({ data }) => {
+                if (active) setControllerInventory([
+                    ...(data?.linked || []),
+                    ...(data?.pending || []),
+                ].filter(device => device.type === 'card'));
+            })
+            .catch(() => {
+                if (active) setInventoryError('CLOUD INVENTORY UNAVAILABLE — check RECONCILE before trying a new AC.');
+            });
+        return () => { active = false; };
+    }, [open, type]);
+
+    const existingCloudControllers = (controllerInventory || []).filter(device =>
+        (ip.trim() && device.displayIp?.trim() === ip.trim()) ||
+        (controllerId.trim() && device.gatewayDeviceId === controllerId.trim())
+    );
 
     useEffect(() => {
         if (!open) return;
@@ -163,6 +191,16 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
 
     const submit = async (e) => {
         e.preventDefault();
+        if (type === 'card' && (inventoryError || controllerInventory === null)) {
+            toast.error('INVENTORY CHECK REQUIRED', { description: inventoryError || 'Cloud controller inventory has not finished loading.' });
+            return;
+        }
+        if (type === 'card' && existingCloudControllers.length > 0) {
+            toast.warning('EXISTING AC FOUND — DO NOT REGISTER A DUPLICATE', {
+                description: 'Use Enrollment → Access Levels to assign the doors of this existing AC, or reconcile its Gateway identity first.',
+            });
+            return;
+        }
         if (type === 'card' && !acStagingReady) {
             toast.error('AC-ONLY ADD-ON NOT READY', { description: 'Install and start the isolated V5 AC-only Gateway add-on first. Existing access systems were not modified.' });
             return;
@@ -263,6 +301,32 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                                 <div className="space-y-3 rounded-xl border border-sky-400/25 bg-sky-500/[0.04] p-3">
                                     <p className="text-sm font-semibold text-sky-200">REGISTER AC DIRECTLY IN WINDOWS GATEWAY</p>
                                     <p className="text-xs text-slate-400">Add NEW ACs without editing Windows JSON: one-time isolated V5 AC-only add-on required. Your existing engine, SDK, card sync and doors are unchanged. New AC becomes active only after a supervised Gateway restart.</p>
+                                    {controllerInventory === null && !inventoryError && (
+                                        <p className="text-xs text-slate-400">Checking existing cloud AC IDs and IPs…</p>
+                                    )}
+                                    {inventoryError && <p className="text-xs text-orange-300">{inventoryError}</p>}
+                                    {existingCloudControllers.length > 0 && (
+                                        <div data-testid="existing-ac-cloud-match" className="rounded-lg border border-orange-400/40 bg-orange-400/5 p-3 space-y-2">
+                                            <p className="text-xs font-bold text-orange-200">EXISTING ACCESS CONTROLLER FOUND</p>
+                                            {existingCloudControllers.map(existing => (
+                                                <p key={existing.id} className="mono text-[10px] text-orange-100">
+                                                    {existing.name} · {existing.gatewayDeviceId || 'NOT LINKED'} · {existing.displayIp || 'NO IP'}
+                                                    {existing.linked ? ' · GATEWAY LINKED' : ' · CLOUD ONLY'}
+                                                </p>
+                                            ))}
+                                            <p className="text-[11px] text-slate-300">
+                                                This is a cloud inventory match, not proof of which physical device owns this IP.
+                                                Do not create another AC with the same address. For a linked existing AC,
+                                                open Enrollment → Access Levels and select its verified door outputs.
+                                                If NOT LINKED, investigate its real Gateway ID in RECONCILE before assigning access.
+                                            </p>
+                                            <Link to="/employees?accessLevels=1" onClick={onClose}
+                                                data-testid="existing-ac-access-levels-link"
+                                                className="inline-flex rounded-lg border border-sky-400/30 px-3 py-2 text-xs font-semibold text-sky-200 hover:bg-sky-500/10">
+                                                OPEN ACCESS LEVELS
+                                            </Link>
+                                        </div>
+                                    )}
                                     {acStagingReady === null ? (
                                         <p className="text-xs text-slate-400">Checking Windows AC-only staging capability…</p>
                                     ) : acStagingReady === false ? (
@@ -314,7 +378,7 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
                             )}
                             </div>
                             <div className="shrink-0 border-t border-white/10 bg-[#0b1220] pt-3">
-                            <button data-testid="add-device-submit-btn" type="submit" disabled={saving || (type === 'card' && (!acStagingReady || !confirmedNewController || controllerDoors.length === 0))}
+                            <button data-testid="add-device-submit-btn" type="submit" disabled={saving || (type === 'card' && (!acStagingReady || !confirmedNewController || controllerDoors.length === 0 || controllerInventory === null || !!inventoryError || existingCloudControllers.length > 0))}
                                 className={`flex w-full items-center justify-center gap-2 rounded-full py-3 font-head font-bold tracking-widest text-sm transition-colors duration-200 ${
                                     saving ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-sky-500 text-[#04121f] hover:bg-cyan-400'
                                 }`}>
