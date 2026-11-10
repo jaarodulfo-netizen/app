@@ -19,8 +19,8 @@ function Avatar({ emp, size = 'h-14 w-14' }) {
 }
 
 function parseVehiclePlates(text) {
-    return (text || '').split(/[,;\\n]+/)
-        .map(plate => plate.trim().toUpperCase().replace(/[\\s-]/g, ''))
+    return (text || '').split(/[,;\n]+/)
+        .map(plate => plate.trim().toUpperCase().replace(/[\s-]/g, ''))
         .filter(Boolean);
 }
 
