@@ -30,8 +30,10 @@ READ_ONLY_PATHS = (
 
 def main():
     parser = argparse.ArgumentParser(description="Read-only Hikvision LPR compatibility probe")
-    parser.add_argument("--url", default="http://192.168.3.1",
-                        help="Camera URL, default http://192.168.3.1")
+    parser.add_argument("--url", default="https://192.168.3.1",
+                        help="Camera URL, default https://192.168.3.1")
+    parser.add_argument("--allow-http", action="store_true",
+                        help="Explicitly permit unencrypted HTTP only on an isolated trusted network")
     parser.add_argument("--user", default="admin", help="Camera account (default admin)")
     args = parser.parse_args()
     parsed = urlparse(args.url)
@@ -39,6 +41,10 @@ def main():
         parser.error("This diagnostic is pinned to camera 192.168.3.1")
     if parsed.username or parsed.password or parsed.path not in ("", "/") or parsed.query:
         parser.error("Do not put credentials or paths in --url")
+    if parsed.scheme == "http" and not args.allow_http:
+        parser.error("HTTP sends a digest exchange without encryption; use HTTPS or explicitly pass --allow-http")
+    if parsed.scheme == "http":
+        print("WARNING: Using unencrypted HTTP on a trusted isolated LAN. Digest challenge may be captured.")
     password = getpass.getpass("LPR camera password (hidden): ")
     if not password:
         parser.error("Camera password is required")
