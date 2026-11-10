@@ -63,7 +63,7 @@ class EmployeePlateContractTest(unittest.TestCase):
         self.assertIn('"accessGrantedByRegistry": False', SERVER)
         self.assertIn('"cameraSyncEnabled": False', SERVER)
         self.assertIn('gateway_auth(request)', SERVER)
-        self.assertIn('LPR CAMERA_IP', SERVER.replace('LPR_CAMERA_IP', 'LPR CAMERA_IP'))
+        self.assertIn('LPR_CAMERA_IP = "192.168.3.1"', SERVER)
         self.assertIn("LPR REGISTRY ONLY", UI)
         self.assertIn("LPR NOT CONNECTED", UI)
         self.assertIn("SAVE VEHICLE ONLY (NO DOOR SYNC)", UI)
