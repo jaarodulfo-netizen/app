@@ -50,3 +50,20 @@ readback and status events, plus local tombstones to prohibit any stale queued
 enrollment from restoring removed credentials. Until then the cloud screen
 correctly displays HARDWARE UNVERIFIED. Additional site Gateways are currently
 rejected rather than silently skipped.
+
+
+## Personnel status and search
+
+For commander users, Personnel includes a read-only history of employees whose
+`is_active` field is false. The active employee endpoint remains unchanged so
+other screens do not accidentally re-enroll, sync or assign old credentials.
+
+The Personnel status column displays `DADO DE BAJA`, offboarding timestamp
+in Monterrey local time, and the actor who performed the action. The status
+filter supports active, offboarded and zero cloud door-rights personnel; the
+last category does **not** claim that device credentials have been removed.
+
+An offboarded row cannot be edited or re-synced. Its card/face status explicitly
+shows `HARDWARE UNVERIFIED` until a future Gateway version can report and
+validate per-device credential deletion. Re-enrollment is not available through
+the archived view. Access history remains in its original collections.

@@ -4,7 +4,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, WebSocket, WebSocketDisconnect, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import Response
 from starlette.middleware.cors import CORSMiddleware
@@ -2240,6 +2240,32 @@ async def compare_historic_ivms_roster(user=Depends(require_commander)):
 async def list_employees(user=Depends(require_enrollment)):
     docs = await db.employees.find({"is_active": {"$ne": False}}).sort("created_at", -1).to_list(500)
     return [doc_id(d) for d in docs]
+
+
+@api_router.get("/employees/offboarded")
+async def list_offboarded_employees(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
+    user=Depends(require_commander),
+):
+    """Commander-only paginated history. Never treat queueing as hardware removal."""
+    condition = {"is_active": False}
+    total = await db.employees.count_documents(condition)
+    docs = await db.employees.find(condition).sort([
+        ("offboardedAt", -1), ("_id", -1),
+    ]).skip(offset).limit(limit).to_list(limit)
+    rows = []
+    for document in docs:
+        archived = doc_id(document)
+        when = archived.get("offboardedAt")
+        if isinstance(when, datetime):
+            # Motor reads MongoDB UTC dates as naive by default. Explicitly
+            # retain UTC to avoid displaying the wrong local audit hour.
+            archived["offboardedAt"] = (
+                when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when
+            ).astimezone(timezone.utc).isoformat()
+        rows.append(archived)
+    return {"rows": rows, "total": total, "offset": offset, "limit": limit}
 
 
 @api_router.post("/employees")
