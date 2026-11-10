@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { PageHeader } from '../components/PageHeader';
 import { useSecurity } from '../context/SecurityContext';
 import { api } from '../context/AuthContext';
+import { IVMS_ACCESS_DEVICES, IVMS_CONTROLLER_SNAPSHOT_DATE } from '../constants/ivmsControllerInventory';
 
 const TYPE_META = {
     gateway: { label: 'GATEWAYS', icon: Network },
@@ -398,6 +399,81 @@ function AddDeviceModal({ open, onClose, initialDevice }) {
     );
 }
 
+
+// Read-only site inventory audit. iVMS screenshot metadata is not a verified
+// Gateway identity, cannot grant rights and must not rewrite Windows device IPs.
+function IvmsControllerSnapshot({ report, localDevices }) {
+    const cloudControllers = [...(report?.linked || []), ...(report?.pending || [])]
+        .filter(device => device.type === 'card');
+    const folded = value => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    return (
+        <div data-testid="ivms-current-ac-inventory" className="rounded-xl border border-sky-400/20 bg-sky-500/[0.035] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="mono text-[10px] tracking-widest text-sky-200">iVMS CURRENT IP REFERENCE · {IVMS_CONTROLLER_SNAPSHOT_DATE}</p>
+                <span className="mono text-[10px] text-slate-400">7 ACCESS CONTROLLERS · 2 DOOR STATIONS</span>
+            </div>
+            <p className="mt-2 text-xs text-slate-400">
+                Operator-supplied iVMS snapshot after network re-IP. Comparison is read-only.
+                A matching name/IP in the cloud is NOT proof that the Windows Gateway owns that physical controller.
+                Do not change Person IDs, Gateway IDs, door rights or passwords based only on this table.
+            </p>
+            <div className="mt-3 overflow-x-auto rounded-lg border border-white/10">
+                <table className="w-full text-left text-xs">
+                    <thead className="bg-white/[0.035] mono text-[9px] tracking-wider text-slate-400">
+                        <tr>
+                            <th className="px-3 py-2">iVMS NAME</th>
+                            <th className="px-3 py-2">EXPECTED IP</th>
+                            <th className="px-3 py-2">DEVICE TYPE</th>
+                            <th className="px-3 py-2">APP RECORD</th>
+                            <th className="px-3 py-2">WINDOWS CONFIG</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {IVMS_ACCESS_DEVICES.map(item => {
+                            const ipMatches = cloudControllers.filter(d => d.displayIp === item.ip);
+                            const nameHints = cloudControllers.filter(d =>
+                                folded(d.name) === folded(item.name) ||
+                                item.previousCloudNames.some(alias => folded(d.name) === folded(alias)));
+                            const cloudMatch = ipMatches.length === 1 ? ipMatches[0] : null;
+                            const legacyHint = ipMatches.length === 0 && nameHints.length === 1 ? nameHints[0] : null;
+                            const windows = localDevices?.filter(d => d.ip === item.ip) || [];
+                            const windowsMatch = windows.length === 1 ? windows[0] : null;
+                            const cloudStatus = item.kind === 'door-station'
+                                ? 'NOT A DS-K2804 AC'
+                                : ipMatches.length > 1 ? 'DUPLICATE CLOUD IP — REVIEW'
+                                : cloudMatch ? (cloudMatch.linked ? 'CLOUD LINKED · VERIFY GATEWAY IP' : 'CLOUD ONLY · NOT LINKED')
+                                : legacyHint ? `POSSIBLE OLD RECORD · ${legacyHint.displayIp || 'NO IP'}`
+                                : 'NO MATCHING CLOUD IP';
+                            const windowsStatus = !localDevices
+                                ? 'LOCAL CONFIG UNAVAILABLE'
+                                : windows.length > 1 ? 'DUPLICATE LOCAL IP'
+                                : windowsMatch ? `${windowsMatch.gatewayDeviceId} · ${windowsMatch.enabled ? 'CONFIGURED' : 'DISABLED'}`
+                                : 'NOT IN LOCAL CONFIG';
+                            return (
+                                <tr key={item.ip} data-testid={item.name === '1-AC3' ? 'ivms-ac-1-ac3' : undefined}
+                                    className={`border-t border-white/5 ${item.name === '1-AC3' ? 'bg-orange-400/[0.08]' : ''}`}>
+                                    <td className="px-3 py-2 font-semibold text-slate-200">{item.name}</td>
+                                    <td className="px-3 py-2 font-mono text-sky-200">{item.ip}</td>
+                                    <td className="px-3 py-2 text-slate-400">{item.kind === 'controller' ? 'ACCESS CONTROLLER' : 'DOOR STATION'}</td>
+                                    <td className={`px-3 py-2 text-[11px] ${cloudMatch?.linked ? 'text-sky-300' : 'text-orange-200'}`}>{cloudStatus}</td>
+                                    <td className="px-3 py-2 text-[11px] text-slate-400">{windowsStatus}</td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+            <p className="mt-3 text-[11px] text-orange-200">
+                1-AC3 · 192.168.3.222: The employee permissions cannot be sent until the
+                Windows Gateway confirms a real controller ID and door outputs, followed by an
+                authorized Access Level assignment and hardware read-back. iVMS ONLINE alone is insufficient.
+                MG-AC1 and MG-AC2 are door stations, not 4-door card controllers.
+            </p>
+        </div>
+    );
+}
+
 function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
     const [report, setReport] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -470,6 +546,7 @@ function InventoryReconciliationModal({ open, onClose, onRegisterController }) {
                                 </div>
                             )}
                         </div>
+                        <IvmsControllerSnapshot report={report} localDevices={localDevices} />
                         {(report.duplicateIps || []).length > 0 && (
                             <div className="space-y-2">
                                 <p className="mono text-[10px] tracking-widest text-orange-300">IP ADDRESS CONFLICTS — DO NOT AUTO-LINK</p>
