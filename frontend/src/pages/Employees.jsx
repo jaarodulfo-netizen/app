@@ -1176,7 +1176,9 @@ export default function Employees() {
             ...(emp.licensePlates || []),
         ].filter(Boolean).join(' ').toLowerCase();
 
-        const matchesQuery = !query.trim() || haystack.includes(query.trim().toLowerCase());
+        const plateSearch = query.trim().toUpperCase().replace(/[\s-]/g, '');
+        const matchesQuery = !query.trim() || haystack.includes(query.trim().toLowerCase()) ||
+            (emp.licensePlates || []).some(plate => plate.includes(plateSearch));
         const matchesFace =
             faceFilter === 'all' ||
             (faceFilter === 'synced' && emp.faceSync) ||
