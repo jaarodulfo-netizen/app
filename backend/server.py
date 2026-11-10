@@ -13,6 +13,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 from bson import ObjectId
+from pymongo.errors import DuplicateKeyError, OperationFailure
 import os
 import logging
 import uuid
@@ -2309,12 +2310,31 @@ def normalize_license_plates(has_vehicle: bool, plates: list) -> list[str]:
 async def check_license_plate_ownership(plates: list[str], *, exclude_id=None):
     if not plates:
         return
-    condition = {"is_active": {"$ne": False}, "licensePlates": {"$in": plates}}
+    # A MongoDB unique multikey index is the authoritative concurrency guard.
+    # The partial filter excludes all legacy records and users without vehicles.
+    # Offboarded vehicle plates remain reserved until physical removal is reviewed.
+    try:
+        await db.employees.create_index(
+            [("licensePlates", 1)],
+            unique=True,
+            name="uq_employee_vehicle_license_plates",
+            partialFilterExpression={"hasVehicle": True},
+        )
+    except OperationFailure as exc:
+        raise HTTPException(
+            status_code=503, detail="Plate uniqueness protection is unavailable; registration blocked"
+        ) from exc
+    condition = {"hasVehicle": True, "licensePlates": {"$in": plates}}
     if exclude_id is not None:
         condition["_id"] = {"$ne": exclude_id}
-    conflict = await db.employees.find_one(condition, {"name": 1})
+    conflict = await db.employees.find_one(condition, {"is_active": 1})
     if conflict:
-        raise HTTPException(status_code=409, detail="A plate is already assigned to another active employee")
+        detail = (
+            "Plate retained by offboarded personnel; physical camera removal must be reviewed"
+            if conflict.get("is_active") is False
+            else "A plate is already assigned to another employee"
+        )
+        raise HTTPException(status_code=409, detail=detail)
 
 
 def vehicle_registry_fields(has_vehicle: bool, plates: list[str], actor: str) -> dict:
@@ -2358,7 +2378,10 @@ async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     doc["created_at"] = datetime.now(timezone.utc)
     doc["created_by"] = user["email"]
     doc["hardwareSync"] = "pending"
-    r = await db.employees.insert_one(doc)
+    try:
+        r = await db.employees.insert_one(doc)
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Duplicate plate or employee identity") from exc
     doc["_id"] = r.inserted_id
 
     try:
@@ -2505,7 +2528,10 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
     updates["updated_at"] = datetime.now(timezone.utc)
     updates["updated_by"] = user["email"]
     updates["hardwareSync"] = "pending"
-    await db.employees.update_one({"_id": oid}, {"$set": updates})
+    try:
+        await db.employees.update_one({"_id": oid}, {"$set": updates})
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Duplicate license plate or employee identity") from exc
     doc = await db.employees.find_one({"_id": oid})
 
     try:
@@ -2547,9 +2573,12 @@ async def update_employee_vehicles(
     plates = normalize_license_plates(body.hasVehicle, body.licensePlates)
     await check_license_plate_ownership(plates, exclude_id=oid)
     fields = vehicle_registry_fields(body.hasVehicle, plates, user["email"])
-    result = await db.employees.update_one(
-        {"_id": oid, "is_active": {"$ne": False}}, {"$set": fields}
-    )
+    try:
+        result = await db.employees.update_one(
+            {"_id": oid, "is_active": {"$ne": False}}, {"$set": fields}
+        )
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="License plate belongs to another employee") from exc
     if result.matched_count != 1:
         raise HTTPException(status_code=409, detail="Employee is no longer active")
     return doc_id(await db.employees.find_one({"_id": oid}))
