@@ -669,7 +669,7 @@ function EnrollModal({ open, onClose }) {
 
 
 function EditEmployeeModal({ employee, onClose }) {
-    const { updateEmployee, doors, devices } = useSecurity();
+    const { updateEmployee, refreshEmployees, doors, devices } = useSecurity();
     const { user } = useAuth();
     const isImportedIvms = employee?.source === 'iVMS-4200';
     const originalValidFrom = String(employee?.validFrom || '').slice(0, 10);
@@ -691,6 +691,9 @@ function EditEmployeeModal({ employee, onClose }) {
     const [accessLevelId, setAccessLevelId] = useState(employee?.accessLevelId || '');
     const initialCards = employee?.cardNos?.length ? employee.cardNos : (employee?.cardNo ? [employee.cardNo] : []);
     const [cardsText, setCardsText] = useState(initialCards.join(', '));
+    const [hasVehicle, setHasVehicle] = useState(Boolean(employee?.hasVehicle || employee?.licensePlates?.length));
+    const [platesText, setPlatesText] = useState((employee?.licensePlates || []).join(', '));
+    const [vehicleSaving, setVehicleSaving] = useState(false);
     const [validFromDate, setValidFromDate] = useState(originalValidFrom);
     const [validToDate, setValidToDate] = useState(originalValidTo);
     const [photo, setPhoto] = useState(null);
@@ -724,6 +727,27 @@ function EditEmployeeModal({ employee, onClose }) {
         .filter(Boolean);
 
     const cardsValid = parsedCards.every((v) => /^\d{10}$/.test(v));
+    const vehicleValid = vehiclePlatesValid(hasVehicle, platesText);
+    const saveVehicleOnly = async () => {
+        if (!vehicleValid) {
+            toast.error('INVALID LICENSE PLATE');
+            return;
+        }
+        setVehicleSaving(true);
+        try {
+            await api.put(`/employees/${employee.id}/vehicles`, {
+                hasVehicle, licensePlates: hasVehicle ? parseVehiclePlates(platesText) : [],
+            });
+            await refreshEmployees();
+            toast.success('VEHICLE REGISTRY UPDATED', {
+                description: 'License plates saved in Security V2. LPR camera sync is not yet connected.',
+            });
+        } catch (e) {
+            toast.error('VEHICLE SAVE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally {
+            setVehicleSaving(false);
+        }
+    };
     const validityChanged = validFromDate !== originalValidFrom || validToDate !== originalValidTo;
     const validityReady = !isImportedIvms || (validFromDate && validToDate &&
         (!validityChanged || user?.role === 'commander'));
@@ -732,6 +756,10 @@ function EditEmployeeModal({ employee, onClose }) {
         if (!name.trim()) return;
         if (!cardsValid) {
             toast.error('INVALID CARD FORMAT', { description: 'Every card must contain exactly 10 digits.' });
+            return;
+        }
+        if (!vehicleValid) {
+            toast.error('INVALID LICENSE PLATE', { description: 'Provide 1–3 different plates, each containing 4–12 letters or digits.' });
             return;
         }
         if (!validityReady) {
@@ -774,6 +802,8 @@ function EditEmployeeModal({ employee, onClose }) {
                 ...(customRights ? { doorRights } : {}),
                 cardNos: parsedCards,
                 cardNo: parsedCards[0] || '',
+                hasVehicle,
+                licensePlates: hasVehicle ? parseVehiclePlates(platesText) : [],
                 photoPath,
                 ...(isImportedIvms && validityChanged ? {
                     validFrom: `${validFromDate}T00:00:00`,
@@ -923,11 +953,19 @@ function EditEmployeeModal({ employee, onClose }) {
                             Separate multiple cards with commas.
                         </p>
                     </div>
+                    <VehicleFields hasVehicle={hasVehicle} setHasVehicle={setHasVehicle}
+                        platesText={platesText} setPlatesText={setPlatesText} testPrefix="edit" />
+                    <button type="button" onClick={saveVehicleOnly}
+                        disabled={vehicleSaving || !vehicleValid}
+                        data-testid="edit-save-vehicle"
+                        className="rounded-lg border border-sky-500/40 px-3 py-2 mono text-[10px] tracking-wide text-sky-200 hover:bg-sky-500/10 disabled:opacity-40">
+                        {vehicleSaving ? 'SAVING VEHICLE…' : 'SAVE VEHICLE ONLY (NO DOOR SYNC)'}
+                    </button>
                 </div>
 
                 <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-5">
                     <button onClick={onClose} className="rounded-full border border-white/10 px-5 py-2.5 mono text-[10px] tracking-widest text-slate-400 hover:text-white">CANCEL</button>
-                    <button onClick={submit} disabled={saving || !cardsValid || !validityReady || !name.trim() || (customRights ? selectedDoors.length === 0 : !accessLevelId)}
+                    <button onClick={submit} disabled={saving || !vehicleValid || !cardsValid || !validityReady || !name.trim() || (customRights ? selectedDoors.length === 0 : !accessLevelId)}
                         className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
                         {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                         {saving ? 'SAVING…' : 'SAVE CHANGES'}
@@ -1135,6 +1173,7 @@ export default function Employees() {
             emp.role,
             emp.level,
             ...cards,
+            ...(emp.licensePlates || []),
         ].filter(Boolean).join(' ').toLowerCase();
 
         const matchesQuery = !query.trim() || haystack.includes(query.trim().toLowerCase());
@@ -1327,6 +1366,7 @@ export default function Employees() {
                                     <th className="px-4 py-3 font-medium">STATUS</th>
                                     <th className="px-4 py-3 font-medium">PERSON ID</th>
                                     <th className="px-4 py-3 font-medium">CARD NO.</th>
+                                    <th className="px-4 py-3 font-medium">LICENSE PLATES</th>
                                     <th className="px-4 py-3 font-medium">ROLE</th>
                                     <th className="px-4 py-3 font-medium">CARD SYNC</th>
                                     <th className="px-4 py-3 font-medium">LEVEL</th>
@@ -1380,6 +1420,16 @@ export default function Employees() {
                                                         <span key={card} className="mono rounded border border-white/5 bg-white/[0.04] px-2 py-1 text-[11px] text-sky-200">{card}</span>
                                                     )) : <span className="mono text-[10px] text-slate-600">NO CARD</span>}
                                                 </div>
+                                            </td>
+                                            <td className="px-4 py-3.5">
+                                                {emp.licensePlates?.length ? (
+                                                    <div className="flex flex-col gap-1">
+                                                        {emp.licensePlates.map(plate => <span key={plate} className="mono text-xs text-sky-200">{plate}</span>)}
+                                                        <span className="mono text-[9px] text-orange-300">
+                                                            {emp.is_active === false ? 'LPR REMOVAL UNVERIFIED' : 'LPR NOT CONNECTED'}
+                                                        </span>
+                                                    </div>
+                                                ) : <span className="mono text-[10px] text-slate-600">NO VEHICLE</span>}
                                             </td>
                                             <td className="px-4 py-3.5 text-xs text-slate-400">{emp.role || '—'}</td>
                                             <td className="px-4 py-3.5">
