@@ -58,7 +58,7 @@ For commander users, Personnel includes a read-only history of employees whose
 `is_active` field is false. The active employee endpoint remains unchanged so
 other screens do not accidentally re-enroll, sync or assign old credentials.
 
-The Personnel status column displays `DADO DE BAJA`, offboarding timestamp
+The Personnel status column displays `OFFBOARDED`, offboarding timestamp
 in Monterrey local time, and the actor who performed the action. The status
 filter supports active, offboarded and zero cloud door-rights personnel; the
 last category does **not** claim that device credentials have been removed.
