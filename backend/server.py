@@ -2242,6 +2242,13 @@ async def list_employees(user=Depends(require_enrollment)):
     return [doc_id(d) for d in docs]
 
 
+@api_router.get("/employees/offboarded")
+async def list_offboarded_employees(user=Depends(require_commander)):
+    """Read-only historical roster. Offboarding never implies hardware removal."""
+    docs = await db.employees.find({"is_active": False}).sort("offboardedAt", -1).to_list(500)
+    return [doc_id(d) for d in docs]
+
+
 @api_router.post("/employees")
 async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     card_no = str(body.cardNo or "").strip()
