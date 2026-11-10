@@ -18,6 +18,49 @@ function Avatar({ emp, size = 'h-14 w-14' }) {
     );
 }
 
+function parseVehiclePlates(text) {
+    return (text || '').split(/[,;\\n]+/)
+        .map(plate => plate.trim().toUpperCase().replace(/[\\s-]/g, ''))
+        .filter(Boolean);
+}
+
+function vehiclePlatesValid(hasVehicle, text) {
+    const plates = parseVehiclePlates(text);
+    return !hasVehicle ? true :
+        plates.length >= 1 && plates.length <= 3 &&
+        plates.every(plate => /^[A-Z0-9]{4,12}$/.test(plate)) &&
+        new Set(plates).size === plates.length;
+}
+
+function VehicleFields({ hasVehicle, setHasVehicle, platesText, setPlatesText, testPrefix }) {
+    return (
+        <div data-testid={`${testPrefix}-vehicle-section`} className="rounded-xl border border-sky-500/20 bg-sky-500/[0.04] p-4">
+            <label className="flex cursor-pointer items-center gap-3 text-xs font-semibold text-sky-100">
+                <input data-testid={`${testPrefix}-has-vehicle`} type="checkbox"
+                    checked={hasVehicle} onChange={e => setHasVehicle(e.target.checked)}
+                    className="accent-sky-500" />
+                EMPLOYEE HAS A VEHICLE
+            </label>
+            {hasVehicle && (
+                <div className="mt-3">
+                    <label className="mono text-[10px] tracking-widest text-slate-400">LICENSE PLATES · UP TO 3</label>
+                    <textarea data-testid={`${testPrefix}-license-plates`}
+                        value={platesText} onChange={e => setPlatesText(e.target.value.toUpperCase())}
+                        rows={2} placeholder="SST-123-A, RRT-987-B"
+                        className="mt-2 w-full rounded-lg border border-white/10 bg-[#0f172a] px-3 py-2 text-xs mono text-sky-200 placeholder:text-slate-600 focus:outline-none focus:border-sky-400/60" />
+                    <p className={`mt-1 text-[10px] ${vehiclePlatesValid(hasVehicle, platesText) ? 'text-slate-400' : 'text-red-300'}`}>
+                        Separate plates with commas. Letters, numbers and hyphens are accepted.
+                    </p>
+                </div>
+            )}
+            <p className="mt-3 text-[10px] text-orange-300">
+                LPR REGISTRY ONLY · CAMERA 192.168.3.1 (iDS-TCM403-BI) · NOT SYNCED.
+                Saving a plate does not add it to the camera allowlist or open the parking barrier.
+            </p>
+        </div>
+    );
+}
+
 function DeleteButton({ onConfirm, testid }) {
     const [armed, setArmed] = useState(false);
     useEffect(() => {
@@ -408,6 +451,8 @@ function EnrollModal({ open, onClose }) {
     const [accessLevels, setAccessLevels] = useState([]);
     const [accessLevelId, setAccessLevelId] = useState('');
     const [cardNo, setCardNo] = useState('');
+    const [hasVehicle, setHasVehicle] = useState(false);
+    const [platesText, setPlatesText] = useState('');
     const [photo, setPhoto] = useState(null);
     const [photoPreview, setPhotoPreview] = useState(null);
     const [saving, setSaving] = useState(false);
@@ -422,6 +467,7 @@ function EnrollModal({ open, onClose }) {
 
     const reset = () => {
         setName(''); setRole(''); setAccessLevelId(''); setCardNo('');
+        setHasVehicle(false); setPlatesText('');
         setPhoto(null);
         if (photoPreview) URL.revokeObjectURL(photoPreview);
         setPhotoPreview(null);
@@ -455,13 +501,17 @@ function EnrollModal({ open, onClose }) {
                 name: name.trim(),
                 role: role.trim() || 'Staff Member',
                 cardNo,
+                hasVehicle,
+                licensePlates: hasVehicle ? parseVehiclePlates(platesText) : [],
                 faceSync: false, // Photo upload is not proof of hardware enrollment.
                 faceMatch: null,
                 level: selectedLevel?.name || 'CUSTOM',
                 accessLevelId,
                 photoPath,
             });
-            toast.info('ENROLLMENT QUEUED', { description: `${name.trim()}: Person ID ${created.personId} · card ${cardNo}. Verify registration on the authorized devices.` });
+            toast.info('ENROLLMENT QUEUED', {
+                description: `${name.trim()}: Person ID ${created.personId} · card ${cardNo}.${hasVehicle ? ' Vehicle plates stored; LPR camera not connected.' : ''} Verify registration on authorized access devices.`,
+            });
             reset();
             onClose();
         } catch (e) {
@@ -471,7 +521,8 @@ function EnrollModal({ open, onClose }) {
         }
     };
 
-    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) && !!accessLevelId;
+    const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) &&
+        !!accessLevelId && vehiclePlatesValid(hasVehicle, platesText);
 
     return (
         <AnimatePresence>
@@ -591,6 +642,10 @@ function EnrollModal({ open, onClose }) {
                             </div>
                         </div>
 
+                        <div className="mt-5">
+                            <VehicleFields hasVehicle={hasVehicle} setHasVehicle={setHasVehicle}
+                                platesText={platesText} setPlatesText={setPlatesText} testPrefix="enroll" />
+                        </div>
                         <div className="mt-7 flex items-center justify-between gap-3 border-t border-white/5 pt-5">
                             <p className="mono text-[9px] tracking-widest text-slate-600 hidden sm:block">FACE ENROLLMENT MUST BE VERIFIED ON EACH TERMINAL</p>
                             <button
