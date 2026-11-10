@@ -1219,7 +1219,6 @@ export default function Employees() {
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <div>
                             <h3 className="font-display font-semibold text-slate-100">OFFBOARDING · DEVICE REVOCATION</h3>
-                            <p className="text-xs text-orange-300 mt-1">QUEUED DOES NOT MEAN ACCESS IS PHYSICALLY REVOKED. Verify on each Hikvision device.</p>
                         </div>
                         <button type="button" onClick={loadRevocations} className="rounded-lg border border-white/15 p-2 text-slate-300" title="Refresh revocation status">
                             <RefreshCw size={15} />
