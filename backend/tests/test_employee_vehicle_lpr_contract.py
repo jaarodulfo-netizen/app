@@ -52,6 +52,10 @@ class EmployeePlateContractTest(unittest.TestCase):
 
     def test_active_owner_lookups_and_offboarded_protection(self):
         self.assertIn('"licensePlates": {"$in": plates}', SERVER)
+        self.assertIn('name="uq_employee_vehicle_license_plates"', SERVER)
+        self.assertIn('partialFilterExpression={"hasVehicle": True}', SERVER)
+        self.assertIn('unique=True', SERVER)
+        self.assertIn('except DuplicateKeyError as exc:', SERVER)
         self.assertIn('"is_active": {"$ne": False}', SERVER)
         self.assertIn('async def update_employee_vehicles(', SERVER)
         self.assertIn('Offboarded personnel cannot enroll vehicles', SERVER)
@@ -80,6 +84,8 @@ class EmployeePlateContractTest(unittest.TestCase):
         self.assertNotIn("post", methods)
         self.assertNotIn("delete", methods)
         self.assertIn('parsed.hostname != "192.168.3.1"', PROBE)
+        self.assertIn('default="https://192.168.3.1"', PROBE)
+        self.assertIn('"--allow-http"', PROBE)
 
 
 if __name__ == "__main__":
