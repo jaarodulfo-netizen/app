@@ -1204,7 +1204,7 @@ export default function Employees() {
                             <option value="all">ALL PERSONNEL STATUS</option>
                             <option value="active">ACTIVE</option>
                             <option value="no_permissions">NO DOOR RIGHTS (CLOUD)</option>
-                            {user?.role === 'commander' && <option value="offboarded">DADO DE BAJA</option>}
+                            {user?.role === 'commander' && <option value="offboarded">OFFBOARDED</option>}
                         </select>
                     </div>
                 </div>
@@ -1307,7 +1307,7 @@ export default function Employees() {
                                             <td className="px-4 py-3.5">
                                                 {emp.is_active === false ? (
                                                     <div className="flex flex-col items-start gap-1">
-                                                        <span data-testid={`employee-offboarded-${emp.id}`} className="mono rounded border border-red-400/40 bg-red-400/10 px-2 py-1 text-[9px] font-semibold tracking-wider text-red-300">DADO DE BAJA</span>
+                                                        <span data-testid={`employee-offboarded-${emp.id}`} className="mono rounded border border-red-400/40 bg-red-400/10 px-2 py-1 text-[9px] font-semibold tracking-wider text-red-300">OFFBOARDED</span>
                                                         <span className="text-[10px] text-slate-400">
                                                             {emp.offboardedAt ? new Date(emp.offboardedAt).toLocaleString('es-MX', { timeZone: 'America/Monterrey', dateStyle: 'short', timeStyle: 'short' }) : 'FECHA NO DISPONIBLE'}
                                                         </span>
