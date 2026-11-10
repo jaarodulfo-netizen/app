@@ -2567,6 +2567,36 @@ async def get_lpr_camera_registry_status(user=Depends(require_enrollment)):
     }
 
 
+@api_router.get("/lpr/gateway-registry")
+async def get_lpr_gateway_plate_registry(request: Request):
+    """Authenticated read-only plate candidates for a future local LPR adapter.
+
+    This endpoint does not issue camera allowlist writes or grant barrier access.
+    It is restricted to the on-site Gateway API key, not public user sessions.
+    """
+    gateway_auth(request)
+    records = db.employees.find({
+        "is_active": {"$ne": False},
+        "hasVehicle": True,
+        "licensePlates": {"$exists": True},
+    })
+    entries = []
+    async for employee in records:
+        for plate in employee.get("licensePlates") or []:
+            entries.append({
+                "plate": plate,
+                "employeeId": str(employee["_id"]),
+                "personId": str(employee.get("personId") or ""),
+            })
+    return {
+        "cameraIp": LPR_CAMERA_IP,
+        "cameraModel": LPR_CAMERA_MODEL,
+        "status": "REGISTRY_ONLY",
+        "cameraSyncEnabled": False,
+        "entries": entries,
+    }
+
+
 @api_router.post("/employees/{item_id}/retry-sync")
 async def retry_employee_sync(item_id: str, user=Depends(require_manual_sync)):
     # A retry uses existing explicit door rights. No second employee is created.
