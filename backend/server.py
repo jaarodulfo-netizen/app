@@ -435,9 +435,73 @@ async def login(body: LoginBody, request: Request):
     return {"access_token": token, "token_type": "bearer", "user": public_user(user)}
 
 
+class GoogleLoginBody(BaseModel):
+    credential: str = Field(min_length=100, max_length=10000)
+
+
+@api_router.post("/auth/google")
+async def google_login(body: GoogleLoginBody, request: Request):
+    # Google ID tokens are verified with Google's published signing keys,
+    # not merely decoded or trusted from the browser.
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+    domain = os.environ.get("GOOGLE_ALLOWED_DOMAIN", "kermagames.com").strip().lower()
+    if not client_id or domain != "kermagames.com":
+        raise HTTPException(status_code=503, detail="Corporate Google login is not configured")
+    try:
+        from google.oauth2 import id_token
+        from google.auth.transport.requests import Request as GoogleRequest
+        claims = await run_in_threadpool(
+            id_token.verify_oauth2_token, body.credential, GoogleRequest(), client_id,
+        )
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Google login dependency unavailable")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Google identity could not be verified")
+    email = str(claims.get("email") or "").strip().lower()
+    subject = claims.get("sub")
+    if (claims.get("email_verified") is not True or
+            claims.get("hd") != domain or email.count("@") != 1 or
+            email.rsplit("@", 1)[-1] != domain or not isinstance(subject, str) or not subject):
+        raise HTTPException(status_code=403, detail="Use a verified Kerma Games corporate Google account")
+    user = await db.users.find_one({"email": email})
+    if not user or not user.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Account not authorized. Contact your commander.")
+    if user.get("google_sub") not in (None, "", subject):
+        raise HTTPException(status_code=403, detail="Google identity differs from the registered identity. Contact your commander.")
+    now = datetime.now(timezone.utc)
+    matched = await db.users.update_one({
+        "_id": user["_id"], "email": email, "is_active": {"$ne": False},
+        "$or": [{"google_sub": {"$exists": False}}, {"google_sub": None},
+                {"google_sub": ""}, {"google_sub": subject}],
+    }, {"$set": {"google_sub": subject, "last_login": now}})
+    if matched.matched_count != 1:
+        raise HTTPException(status_code=403, detail="Account not authorized. Contact your commander.")
+    user = await db.users.find_one({"_id": user["_id"]})
+    if not user or not user.get("is_active", True):
+        raise HTTPException(status_code=403, detail="Account not authorized")
+    jti = uuid.uuid4().hex
+    await db.sessions.insert_one({
+        "jti": jti, "user_id": str(user["_id"]),
+        "ip": request.client.host if request.client else "unknown",
+        "agent": sniff_agent(request.headers.get("user-agent", "")),
+        "created_at": now, "last_seen": now, "auth_provider": "google",
+    })
+    token = create_access_token(str(user["_id"]), user["email"], user["role"], jti)
+    # A Google-authenticated session does not use a temporary local password.
+    # Keep the stored password-change flag intact for password-based sessions.
+    view = public_user(user)
+    view["must_change_password"] = False
+    return {"access_token": token, "token_type": "bearer", "user": view}
+
+
 @api_router.get("/auth/me")
-async def me(user=Depends(get_current_user)):
-    return public_user(user)
+async def me(user=Depends(get_current_user), creds: HTTPAuthorizationCredentials = Depends(bearer)):
+    view = public_user(user)
+    payload = decode_token(creds.credentials)
+    session = await db.sessions.find_one({"jti": payload.get("jti"), "user_id": str(user["_id"])})
+    if session and session.get("auth_provider") == "google":
+        view["must_change_password"] = False
+    return view
 
 
 @api_router.post("/auth/logout")
