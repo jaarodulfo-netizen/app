@@ -1676,7 +1676,9 @@ async def gateway_socket(websocket: WebSocket):
                 registered_count = await register_gateway_physical_devices(
                     gateway_id, advertised, linux_monitor=linux_monitor,
                 )
-                logger.info("Gateway inventory registered %s physical devices", registered_count)
+                logger.info("Gateway inventory registered %s physical devices (agentVersion=%s)", registered_count, agent_version)
+                if gateway_id == "kerma-monterrey":
+                    await reconcile_kerma_display_inventory()
                 await websocket.send_json({"type": "registered", "gatewayId": gateway_id, "hubTime": int(datetime.now().timestamp() * 1000)})
                 # Do not block the websocket receiver: it must process the
                 # acknowledgement that completes pending revocation delivery.
@@ -3122,7 +3124,9 @@ async def delete_camera(item_id: str, user=Depends(require_cctv)):
 
 @api_router.get("/devices")
 async def list_devices(user=Depends(get_current_user)):
-    query = {} if effective_permissions(user)["cctv"] else {"type": {"$ne": "nvr"}}
+    query = {"inventoryArchived": {"$ne": True}}
+    if not effective_permissions(user)["cctv"]:
+        query["type"] = {"$ne": "nvr"}
     docs = await db.devices.find(query).sort("created_at", 1).to_list(500)
     return [doc_id(d) for d in docs]
 
@@ -3135,7 +3139,7 @@ async def preview_device_reconciliation(user=Depends(require_commander)):
     IP matches nor similar names may grant credentials or rewrite door rights.
     """
     docs = await db.devices.find(
-        {"type": {"$in": ["card", "face"]}},
+        {"type": {"$in": ["card", "face"]}, "inventoryArchived": {"$ne": True}},
         {"type": 1, "name": 1, "ip": 1, "gatewayDeviceId": 1,
          "gatewayId": 1, "gatewayRegistered": 1, "gatewayOnline": 1,
          "gatewayLastSeen": 1, "status": 1},
@@ -3376,7 +3380,7 @@ async def create_device(body: DeviceIn, user=Depends(get_current_user)):
         ensure_permission(user, "cctv")
     if body.type in {"card", "face"}:
         existing_name = await db.devices.find_one({
-            "type": body.type, "name": body.name.strip(),
+            "type": body.type, "name": body.name.strip(), "inventoryArchived": {"$ne": True},
         }, {"_id": 1})
         if existing_name:
             raise HTTPException(
@@ -4317,9 +4321,73 @@ async def migrate_hardware_doors_to_unplaced_once():
     })
 
 
+async def reconcile_kerma_display_inventory():
+    """Correct display metadata only for already registered physical IDs.
+    Never change gateway IDs, doors, credentials, permissions or online state.
+    Retain redundant manual entries in MongoDB for audit and recovery.
+    """
+    aliases = {
+        "1st-floor-ac": {"1st Floor AC 1", "1st Floor AC"},
+        "2nd-floor-ac": {"2nd Floor Games Access Control", "2nd Floor AC"},
+        "1st-floor-2nd-ac": {"1st Floor Second AC · 2", "1st Floor 2nd AC"},
+        "restrooms": {"Restrooms"},
+        "3rd-floor-ac": {"3rd Floor AC"},
+        "break-room": {"Break Room"},
+        "torniquete-1-entrada": {"Turnstile 1 Entrance", "Torniquete Entrada"},
+        "torniquete-1-salida": {"Torniquete Salida"},
+        "torniquete-2-entrada": {"Turnstile 2 Entrance", "Torniquete Entrada 2"},
+        "torniquete-2-salida": {"Torniquete Salida 2"},
+        "main-inventory": {"Main Inventory"},
+        "roof-stairs": {"Roof Stairs"},
+        "technicians-inventory": {"Technicians Inventory", "Technicians Inventory 2"},
+    }
+    corrected = archived = 0
+    for device_id, (name, ip, role, _) in LINUX_SITE_MANIFEST.items():
+        dev_type = "card" if role == "controller" else "face"
+        linked = await db.devices.find({
+            "gatewayDeviceId": device_id, "gatewayId": "kerma-monterrey",
+            "gatewayRegistered": True, "type": dev_type,
+            "inventoryArchived": {"$ne": True},
+        }).to_list(2)
+        if len(linked) != 1:
+            continue
+        canonical = linked[0]
+        if canonical.get("ip") != ip:
+            await db.devices.update_one({"_id": canonical["_id"]},
+                {"$set": {"ip": ip, "inventoryIpSource": "validated-site-manifest"}})
+            corrected += 1
+        names = {n.strip().casefold() for n in aliases.get(device_id, set()) | {name}}
+        candidates = await db.devices.find({
+            "type": dev_type, "ip": ip, "gatewayRegistered": {"$ne": True},
+            "gatewayDeviceId": {"$in": [None, ""]},
+            "inventoryArchived": {"$ne": True},
+        }).to_list(100)
+        for row in candidates:
+            if str(row.get("name") or "").strip().casefold() not in names or row.get("doors"):
+                continue
+            row_id = str(row["_id"])
+            if await db.doors.find_one({"deviceId": {"$in": [row_id, row["_id"]]}}):
+                continue
+            if await db.attendance_config.find_one({"device_id": row_id}):
+                continue
+            result = await db.devices.update_one({
+                "_id": row["_id"], "gatewayRegistered": {"$ne": True},
+                "gatewayDeviceId": {"$in": [None, ""]},
+            }, {"$set": {"inventoryArchived": True,
+                        "inventoryArchiveReason": "redundant manual display record",
+                        "inventoryCanonicalId": str(canonical["_id"]),
+                        "inventoryArchivedAt": datetime.now(timezone.utc)}})
+            archived += result.modified_count
+    logger.info("Kerma display inventory: %s IPs corrected, %s redundant manual records archived", corrected, archived)
+
+
 async def seed_kerma_devices():
     attendance_id = None
     for item in KERMA_DEVICE_SEED:
+        # Access inventory is owned by the authenticated gateway, never by
+        # historical static seed addresses. Preserve all existing records.
+        if item["type"] in {"card", "face"}:
+            continue
         # Match physical devices by immutable Gateway ID, not mutable
         # display name. A newly discovered controller must not be overwritten
         # with a different static ID when Railway restarts.
@@ -4365,6 +4433,7 @@ async def startup():
     HLS_ROOT.mkdir(parents=True, exist_ok=True)
     await db.kerma_file_index.create_index("path", unique=True)
     await seed_kerma_devices()
+    await reconcile_kerma_display_inventory()
     await seed_kerma_doors()
     await migrate_hardware_doors_to_unplaced_once()
     await migrate_door_status_events_once()
