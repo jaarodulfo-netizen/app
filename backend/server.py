@@ -1215,6 +1215,51 @@ gateway_pending: dict[str, asyncio.Future] = {}
 # Only the isolated V5 AC-only agent may stage controllers. The original and
 # rolled-back Windows Gateway must never receive unsupported create commands.
 gateway_ac_only_versions: dict[str, str] = {}
+# Site-specific manifest from the serial-pinned Linux V3 deployment.
+# IP/name alone never authorize a target: the authenticated agent must
+# announce the matching ID/role/outputs and report its serial-checked health.
+LINUX_MONITOR_VERSION = "3.0.0-linux-live-monitor"
+LINUX_SITE_MANIFEST = {
+    "vip-entrance": ("VIP ENTRANCE", "192.168.3.220", "face-terminal", (1,)),
+    "vip-exit": ("VIP EXIT", "192.168.3.219", "face-terminal", (1,)),
+    "torniquete-1-entrada": ("TURNSTILE 1 ENTRY", "192.168.3.205", "face-terminal", (1,)),
+    "torniquete-1-salida": ("TURNSTILE 1 EXIT", "192.168.3.207", "face-terminal", (1,)),
+    "torniquete-2-entrada": ("TURNSTILE 2 ENTRY", "192.168.3.206", "face-terminal", (1,)),
+    "torniquete-2-salida": ("TURNSTILE 2 EXIT", "192.168.3.208", "face-terminal", (1,)),
+    "main-inventory": ("STORAGE MAIN", "192.168.3.212", "face-terminal", (1,)),
+    "cleaning-storage": ("CLEANING STORAGE", "192.168.3.210", "face-terminal", (1,)),
+    "roof-stairs": ("STAIRS ROOF", "192.168.3.211", "face-terminal", (1,)),
+    "technicians-inventory": ("TECHNICIANS STORAGE", "192.168.3.213", "face-terminal", (1,)),
+    "1st-floor-ac": ("1-AC1", "192.168.3.201", "controller", (1, 2, 3, 4)),
+    "2nd-floor-ac": ("2-AC6", "192.168.3.202", "controller", (1, 2, 3, 4)),
+    "1st-floor-2nd-ac": ("1-AC2", "192.168.3.203", "controller", (1, 2, 3, 4)),
+    "restrooms": ("2-AC1 Restrooms", "192.168.3.204", "controller", (1, 2, 3, 4)),
+    "3rd-floor-ac": ("3-AC1", "192.168.3.209", "controller", (1, 2, 3, 4)),
+    "break-room": ("B-AC1 Break Room", "192.168.3.214", "controller", (1, 2, 3, 4)),
+    "1-ac3": ("1-AC3", "192.168.3.222", "controller", ()),
+    "2-ac7": ("2-AC7", "192.168.3.223", "controller", ()),
+}
+gateway_linux_inventory: dict[str, dict] = {}
+
+def linux_inventory_item(raw):
+    if not isinstance(raw, dict):
+        return None
+    device_id = raw.get("id")
+    if not isinstance(device_id, str):
+        return None
+    expected = LINUX_SITE_MANIFEST.get(device_id)
+    if not expected:
+        return None
+    name, ip, role, doors = expected
+    reported = raw.get("doors")
+    if (str(raw.get("name") or "").strip().casefold() != name.casefold()
+            or raw.get("role") != role or not isinstance(reported, list)
+            or any(type(n) is not int for n in reported)
+            or tuple(sorted(reported)) != doors):
+        return None
+    return {"id": device_id, "name": name, "role": role,
+            "doors": list(doors), "online": raw.get("online") is True, "ip": ip}
+
 
 # Independent media WebSocket: never queue large HLS video in the door/control
 # command channel. The gateway authenticates using the same shared secret
@@ -1416,7 +1461,7 @@ async def send_gateway_command(command: dict, gateway_id: str = "kerma-monterrey
         gateway_pending.pop(request_id, None)
 
 
-async def register_gateway_physical_devices(gateway_id: str, advertised: list) -> int:
+async def register_gateway_physical_devices(gateway_id: str, advertised: list, *, linux_monitor=False, mark_missing=True) -> int:
     """Discover enabled local ACs/facials and their REAL door outputs from the
     authenticated Windows Gateway inventory. Never fabricate hardware rights.
     Preserve existing human door names, visibility, floor layout, and levels.
@@ -1459,6 +1504,56 @@ async def register_gateway_physical_devices(gateway_id: str, advertised: list) -
             logger.error("Gateway device %s is linked to another Gateway", dev_id)
             continue
 
+        if linux_monitor:
+            expected = linux_inventory_item(raw)
+            if expected is None:
+                logger.warning("Linux inventory identity mismatch for %s", dev_id)
+                continue
+            # Do not create or link a new physical record before the agent's
+            # serial-pinned SDK/ISAPI health check has succeeded.
+            if not online:
+                if existing:
+                    await db.devices.update_one({"_id": existing["_id"]}, {"$set": {
+                        "gatewayOnline": False, "status": "offline",
+                    }})
+                continue
+            if not existing:
+                manual_filter = {
+                    "type": dev_type, "ip": expected["ip"],
+                    "$or": [{"gatewayDeviceId": {"$exists": False}},
+                            {"gatewayDeviceId": None}, {"gatewayDeviceId": ""}],
+                }
+                candidates = await db.devices.find(manual_filter).to_list(3)
+                if candidates:
+                    if (len(candidates) != 1 or
+                            str(candidates[0].get("name") or "").strip().casefold()
+                            != expected["name"].casefold()):
+                        logger.warning("Linux manual inventory conflict for %s; no binding made", dev_id)
+                        continue
+                    existing = candidates[0]
+                    # A manually placed door with a different hardware ID is
+                    # not automatically repointed or granted new rights.
+                    incompatible = await db.doors.find_one({
+                        "deviceId": str(existing["_id"]),
+                        "gatewayDeviceId": {"$nin": [None, "", dev_id]},
+                    })
+                    if incompatible:
+                        logger.warning("Linux door reference conflict for %s", dev_id)
+                        continue
+                else:
+                    # Do not fall through to the old name-only matching path.
+                    name_conflict = await db.devices.find_one({
+                        "type": dev_type, "name": {"$regex": "^" + re.escape(name) + "$", "$options": "i"},
+                    })
+                    if name_conflict:
+                        logger.warning("Linux name conflict for %s; no binding made", dev_id)
+                        continue
+                    doc = {"type": dev_type, "name": name, "ip": expected["ip"],
+                           "fw": "", "detail": "Linux Gateway serial-checked inventory",
+                           "signal": 95, "created_at": now}
+                    result = await db.devices.insert_one(doc)
+                    existing = {"_id": result.inserted_id, **doc}
+
         if not existing:
             # Reconcile a manual registration only when the type and name are
             # an exact UNIQUE match. Ambiguous matches stay untouched.
@@ -1483,6 +1578,7 @@ async def register_gateway_physical_devices(gateway_id: str, advertised: list) -
             "gatewayRegistered": True, "gatewayOnline": online,
             "status": "online" if online else "offline",
             "doors": numbers, "gatewayLastSeen": now,
+            **({"ip": expected["ip"]} if linux_monitor else {}),
         }})
         for number in numbers:
             lookup = {"gatewayDeviceId": dev_id, "doorNo": number}
@@ -1505,6 +1601,9 @@ async def register_gateway_physical_devices(gateway_id: str, advertised: list) -
                     "created_at": now,
                 })
         discovered += 1
+
+    if not mark_missing:
+        return discovered
 
     # A formerly linked AC omitted from this authenticated inventory is not
     # online/confirmed anymore. Keep its doors and access-level history, but
@@ -1556,8 +1655,26 @@ async def gateway_socket(websocket: WebSocket):
                 agent_version = str(msg.get("agentVersion") or "")[:80]
                 gateway_ac_only_versions[gateway_id] = agent_version
                 logger.info("Gateway registered: %s with %s devices", gateway_id, len(msg.get("devices") or []))
+                linux_monitor = gateway_id == "kerma-monterrey" and agent_version == LINUX_MONITOR_VERSION
+                advertised = msg.get("devices") or []
+                if linux_monitor:
+                    if not isinstance(advertised, list) or len(advertised) > 256:
+                        await websocket.close(code=1008)
+                        return
+                    inventory = {}
+                    for raw in advertised:
+                        item = linux_inventory_item(raw)
+                        if item is None or item["id"] in inventory:
+                            logger.warning("Rejected inconsistent Linux inventory")
+                            await websocket.close(code=1008)
+                            return
+                        inventory[item["id"]] = item
+                    gateway_linux_inventory[gateway_id] = inventory
+                    advertised = list(inventory.values())
+                else:
+                    gateway_linux_inventory.pop(gateway_id, None)
                 registered_count = await register_gateway_physical_devices(
-                    gateway_id, msg.get("devices") or [],
+                    gateway_id, advertised, linux_monitor=linux_monitor,
                 )
                 logger.info("Gateway inventory registered %s physical devices", registered_count)
                 await websocket.send_json({"type": "registered", "gatewayId": gateway_id, "hubTime": int(datetime.now().timestamp() * 1000)})
@@ -1579,7 +1696,19 @@ async def gateway_socket(websocket: WebSocket):
 
             if msg_type == "device-status":
                 dev_id = msg.get("deviceId")
-                online = bool(msg.get("online"))
+                online = msg.get("online") is True
+                if not gateway_id or gateway_connections.get(gateway_id) is not websocket:
+                    continue
+                linux_inventory = gateway_linux_inventory.get(gateway_id)
+                if linux_inventory is not None:
+                    if not isinstance(dev_id, str) or dev_id not in linux_inventory:
+                        continue
+                    item = linux_inventory[dev_id]
+                    item["online"] = online
+                    if online:
+                        await register_gateway_physical_devices(
+                            gateway_id, [item], linux_monitor=True, mark_missing=False,
+                        )
                 await db.devices.update_one(
                     {"gatewayDeviceId": dev_id},
                     {"$set": {
@@ -1684,7 +1813,7 @@ async def gateway_socket(websocket: WebSocket):
         if gateway_id and gateway_connections.get(gateway_id) is websocket:
             gateway_connections.pop(gateway_id, None)
             gateway_ac_only_versions.pop(gateway_id, None)
-        if gateway_id:
+            gateway_linux_inventory.pop(gateway_id, None)
             await db.devices.update_many(
                 {"gatewayId": gateway_id},
                 {"$set": {"gatewayOnline": False, "status": "offline", "gatewayLastSeen": datetime.now(timezone.utc)}},
@@ -3104,6 +3233,17 @@ async def gateway_local_inventory(user=Depends(require_commander)):
     """
     if "kerma-monterrey" not in gateway_connections:
         raise HTTPException(status_code=503, detail="Windows Gateway is offline")
+    if gateway_ac_only_versions.get("kerma-monterrey") == LINUX_MONITOR_VERSION:
+        snapshot = gateway_linux_inventory.get("kerma-monterrey")
+        if snapshot is None:
+            raise HTTPException(status_code=503, detail="Linux Gateway inventory not registered yet")
+        clean = [{"gatewayDeviceId": row["id"], "name": row["name"],
+                  "ip": row["ip"], "role": row["role"], "enabled": True,
+                  "doors": row["doors"], "online": row["online"]}
+                 for row in snapshot.values()]
+        return {"source": "Linux Gateway registration + validated site manifest",
+                "readOnly": True, "ipSource": "site-manifest", "devices": clean,
+                "count": len(clean)}
     if gateway_ac_only_versions.get("kerma-monterrey") != "0.5.0-ac-only":
         raise HTTPException(
             status_code=412,
