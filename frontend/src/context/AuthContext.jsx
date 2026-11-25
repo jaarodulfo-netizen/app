@@ -47,6 +47,12 @@ export function AuthProvider({ children }) {
         return data.user;
     };
 
+    const loginGoogle = async (credential) => {
+        const { data } = await api.post('/auth/google', { credential });
+        localStorage.setItem('kerma_token', data.access_token);
+        return data.user;
+    };
+
     const commitSession = (u) => setUser(u);
 
     const logout = () => {
@@ -54,5 +60,5 @@ export function AuthProvider({ children }) {
         setUser(null);
     };
 
-    return <AuthContext.Provider value={{ user, setUser, login, logout, commitSession }}>{children}</AuthContext.Provider>;
+    return <AuthContext.Provider value={{ user, setUser, login, loginGoogle, logout, commitSession }}>{children}</AuthContext.Provider>;
 }
