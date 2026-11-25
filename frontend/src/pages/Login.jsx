@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Lock, Mail, LogIn, Loader2, ShieldAlert } from 'lucide-react';
 import { useAuth, formatApiError } from '../context/AuthContext';
@@ -83,12 +83,74 @@ function ClearanceSplash({ name, role }) {
 }
 
 export default function Login() {
-    const { login, commitSession } = useAuth();
+    const { login, loginGoogle, commitSession } = useAuth();
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
     const [granted, setGranted] = useState(null);
+    const googleButton = useRef(null);
+    const busyRef = useRef(false);
+    const googleClientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
+    const googleCallback = useRef(null);
+    googleCallback.current = async ({ credential }) => {
+        if (busyRef.current || !credential) return;
+        busyRef.current = true;
+        setBusy(true);
+        setError('');
+        try {
+            setGranted(await loginGoogle(credential));
+        } catch (err) {
+            setError(formatApiError(err.response?.data?.detail));
+        } finally {
+            busyRef.current = false;
+            setBusy(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!googleClientId) return;
+        let disposed = false;
+        const mount = () => {
+            if (disposed || !googleButton.current || !window.google?.accounts?.id) return;
+            try {
+                window.google.accounts.id.initialize({
+                    client_id: googleClientId,
+                    callback: (response) => googleCallback.current(response),
+                    hd: 'kermagames.com',
+                    auto_select: false,
+                });
+                googleButton.current.replaceChildren();
+                window.google.accounts.id.renderButton(googleButton.current, {
+                    theme: 'outline', size: 'large', text: 'signin_with', shape: 'pill',
+                    width: Math.min(320, Math.floor(googleButton.current.clientWidth || 300)),
+                });
+            } catch {
+                setError('Google sign-in unavailable. Use officer credentials.');
+            }
+        };
+        const failed = () => { if (!disposed) setError('Google sign-in unavailable. Use officer credentials.'); };
+        if (window.google?.accounts?.id) {
+            mount();
+            return () => { disposed = true; };
+        }
+        let script = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+        const created = !script;
+        if (created) {
+            script = document.createElement('script');
+            script.src = 'https://accounts.google.com/gsi/client';
+            script.async = true;
+        }
+        script.addEventListener('load', mount);
+        script.addEventListener('error', failed);
+        if (created) document.head.appendChild(script);
+        return () => {
+            disposed = true;
+            script.removeEventListener('load', mount);
+            script.removeEventListener('error', failed);
+        };
+    }, [googleClientId]);
+
 
     useEffect(() => {
         if (!granted) return;
@@ -98,7 +160,8 @@ export default function Login() {
 
     const submit = async (e) => {
         e.preventDefault();
-        if (busy) return;
+        if (busyRef.current) return;
+        busyRef.current = true;
         setBusy(true);
         setError('');
         try {
@@ -107,6 +170,7 @@ export default function Login() {
         } catch (err) {
             setError(formatApiError(err.response?.data?.detail));
         } finally {
+            busyRef.current = false;
             setBusy(false);
         }
     };
@@ -143,6 +207,18 @@ export default function Login() {
                     Console access is restricted to <span className="text-gold mono text-xs">@kermagames.com</span> and{' '}
                     <span className="text-gold mono text-xs">@trivelta.com</span> credentials.
                 </p>
+
+                {googleClientId && (
+                    <div className="mt-7 space-y-3">
+                        <div ref={googleButton} className="flex min-h-10 w-full justify-center" data-testid="google-signin" />
+                        <p className="text-center text-xs text-slate-500">Authorized @kermagames.com accounts only</p>
+                        <div className="flex items-center gap-3">
+                            <span className="h-px flex-1 bg-white/10" />
+                            <span className="mono text-[9px] tracking-widest text-slate-500">OR USE OFFICER CREDENTIALS</span>
+                            <span className="h-px flex-1 bg-white/10" />
+                        </div>
+                    </div>
+                )}
 
                 <form onSubmit={submit} className="mt-8 space-y-4">
                     <div>
