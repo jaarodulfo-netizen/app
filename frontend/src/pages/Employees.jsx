@@ -131,7 +131,8 @@ function AccessLevelsModal({ open, onClose }) {
     const gatewayDeviceMap = Object.fromEntries(
         (devices || []).filter((d) => d.gatewayDeviceId).map((d) => [d.gatewayDeviceId, d]),
     );
-    const physicalDoors = (doors || []).filter((d) => d.gatewayDeviceId && d.doorNo && d.visible !== false);
+    const physicalDoors = (doors || []).filter(d => d.gatewayDeviceId && d.doorNo && d.hardwareLinked !== false && gatewayDeviceMap[d.gatewayDeviceId]?.type !== undefined && d.gatewayDeviceId !== 'attendance-main').sort((a,b) => String(gatewayDeviceMap[a.gatewayDeviceId]?.name || a.gatewayDeviceId).localeCompare(String(gatewayDeviceMap[b.gatewayDeviceId]?.name || b.gatewayDeviceId)) || Number(a.doorNo)-Number(b.doorNo));
+    const controllersWithoutOutputs = (devices || []).filter(d => d.type === 'card' && !physicalDoors.some(door => door.gatewayDeviceId === d.gatewayDeviceId));
     const controllerDoors = (doors || []).filter(
         (d) => d.gatewayDeviceId && d.doorNo && gatewayDeviceMap[d.gatewayDeviceId]?.type === 'card',
     );
@@ -303,6 +304,7 @@ function AccessLevelsModal({ open, onClose }) {
                                         <p className="mono text-[10px] tracking-widest text-slate-500">ACCESS POINTS</p>
                                         <p className="mono text-[9px] text-sky-400">{selected.length} SELECTED</p>
                                     </div>
+                                    <p className="mt-2 text-xs text-slate-400">All registered physical access points, including doors hidden from the facility map. Attendance-only terminal excluded.</p>
                                     <div className="mt-3 grid gap-2 sm:grid-cols-2 max-h-[390px] overflow-y-auto pr-1">
                                         {physicalDoors.map((door) => {
                                             const key = `${door.gatewayDeviceId}:${door.doorNo}`;
@@ -312,7 +314,7 @@ function AccessLevelsModal({ open, onClose }) {
                                                     className={`flex items-center justify-between rounded-lg border px-3 py-3 text-left transition-colors ${active ? 'border-emerald-400/50 bg-emerald-400/10' : 'border-white/10 bg-white/[0.02] hover:border-sky-400/30'}`}>
                                                     <div>
                                                         <p className="text-xs font-semibold text-slate-200">{door.name}</p>
-                                                        <p className="mono text-[9px] text-slate-600 mt-1">{door.gatewayDeviceId} · DOOR {door.doorNo}</p>
+                                                        <p className="mono text-[9px] text-slate-600 mt-1">{gatewayDeviceMap[door.gatewayDeviceId]?.name || door.gatewayDeviceId} · DOOR {door.doorNo}{door.visible === false ? ' · HIDDEN ON MAP' : ''}</p>
                                                     </div>
                                                     <div className={`h-5 w-5 rounded border flex items-center justify-center ${active ? 'border-emerald-400 bg-emerald-400/20' : 'border-white/15'}`}>
                                                         {active && <Check size={13} className="text-emerald-300" />}
@@ -320,6 +322,7 @@ function AccessLevelsModal({ open, onClose }) {
                                                 </button>
                                             );
                                         })}
+                                        {controllersWithoutOutputs.map(device => <div key={device.id} className="rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-3"><p className="text-xs font-semibold text-slate-200">{device.name} · {device.ip}</p><p className="mt-1 text-xs text-amber-300">No verified door outputs — Gateway verification required</p></div>)}
                                         {physicalDoors.length === 0 && (
                                             <p className="sm:col-span-2 py-8 text-center mono text-[10px] text-slate-600">NO PHYSICAL DOORS AVAILABLE</p>
                                         )}
@@ -683,8 +686,7 @@ function EditEmployeeModal({ employee, onClose }) {
     });
     const deviceNames = Object.fromEntries((devices || []).filter(d => d.gatewayDeviceId)
         .map(d => [d.gatewayDeviceId, d.name]));
-    const availableDoors = (doors || []).filter(d => d.gatewayDeviceId && Number.isInteger(Number(d.doorNo)) && Number(d.doorNo) > 0 &&
-        (d.visible !== false || selectedDoors.includes(`${d.gatewayDeviceId}:${Number(d.doorNo)}`)));
+    const availableDoors = (doors || []).filter(d => d.gatewayDeviceId && Number.isInteger(Number(d.doorNo)) && Number(d.doorNo) > 0 && d.hardwareLinked !== false && (d.gatewayDeviceId !== 'attendance-main' || selectedDoors.includes(`${d.gatewayDeviceId}:${Number(d.doorNo)}`)));
     const toggleDoor = (key) => setSelectedDoors(prev => prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]);
     const [name, setName] = useState(employee?.name || '');
     const [role, setRole] = useState(employee?.role || '');
