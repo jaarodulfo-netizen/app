@@ -513,7 +513,9 @@ function EnrollModal({ open, onClose }) {
                 accessLevelId,
                 photoPath,
             });
-            toast.info('ENROLLMENT QUEUED', {
+            if (created.hardwareSync === 'pending') {
+                toast.warning('EMPLOYEE SAVED — HARDWARE SYNC PENDING', { description: 'Employee saved in the cloud. Gateway has not enabled physical access. Retry synchronization when provisioning is available.' });
+            } else toast.info('ENROLLMENT QUEUED', {
                 description: `${name.trim()}: Person ID ${created.personId} · card ${cardNo}.${hasVehicle ? ' Vehicle plates stored; LPR camera not connected.' : ''} Verify registration on authorized access devices.`,
             });
             reset();
