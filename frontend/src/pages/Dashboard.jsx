@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { motion, animate } from 'framer-motion';
 import { Users, DoorOpen, Video, AlertTriangle, ArrowRight, ScanFace, Cctv, WifiOff, HardDrive, Network, Nfc } from 'lucide-react';
 import { useSecurity } from '../context/SecurityContext';
-import { LiveAccessPhotoFeed } from '../components/LiveAccessPhotoFeed';
+import { AccessSpotlight } from '../components/AccessSpotlight';
 import { MARQUEE_FALLBACK } from '../data/mockData';
 
 function AnimatedNumber({ value, pad = 0 }) {
@@ -64,6 +64,9 @@ export default function Dashboard() {
 
     return (
         <div className="space-y-6" data-testid="dashboard-page">
+            {/* ACTIVIDAD EN VIVO: ultima persona en una puerta, verde si entra, rojo si no */}
+            <AccessSpotlight history={8} />
+
             {/* HERO */}
             <section className="aegis-panel corner-frame relative overflow-hidden rounded-2xl bg-grid px-6 sm:px-10 py-10 sm:py-14">
                 <div className="pointer-events-none absolute -left-24 -bottom-28 h-80 w-80 rounded-full bg-[#ea7f2b]/10 blur-[110px]" />
@@ -241,22 +244,6 @@ export default function Dashboard() {
                     transition={{ delay: 0.4, duration: 0.7 }}
                     className="space-y-6"
                 >
-                    <div className="aegis-panel rounded-xl p-5">
-                        <div className="flex items-center justify-between mb-4">
-                            <div>
-                                <p className="mono text-[9px] tracking-[0.28em] text-sky-400">CREDENTIAL ACTIVITY</p>
-                                <h2 className="mt-1 font-head font-bold tracking-wider text-slate-100">LIVE ACCESS</h2>
-                            </div>
-                            <Link
-                                to="/events"
-                                className="mono text-[10px] tracking-widest text-sky-400 hover:text-[#fee396] transition-colors duration-200"
-                            >
-                                FULL LOG →
-                            </Link>
-                        </div>
-                        <LiveAccessPhotoFeed limit={5} />
-                    </div>
-
                     <div className="aegis-panel rounded-xl p-5">
                         <div className="flex items-center justify-between mb-4">
                             <h2 className="font-head font-bold tracking-wider text-slate-100">GATEWAY MESH</h2>
