@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Clock3, Download, Fingerprint, RefreshCw, Save, ScanFace, TimerReset, Users } from 'lucide-react';
+import { Clock3, Download, FileText, Search, Fingerprint, RefreshCw, Save, ScanFace, TimerReset, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/PageHeader';
 import { useSecurity } from '@/context/SecurityContext';
@@ -14,7 +14,7 @@ function localDateString(d = new Date()) {
 
 function fmt(iso) {
     if (!iso) return '—';
-    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return new Date(iso).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Monterrey' });
 }
 
 function fmtDate(value) {
@@ -48,12 +48,16 @@ function semiMonthRange(base = new Date(), half = null) {
 }
 
 function csvCell(value) {
-    return `"${String(value ?? '').replace(/"/g, '""')}"`;
+    const raw = String(value ?? '');
+    const safe = /^[\s]*[=+@-]/.test(raw) ? "'" + raw : raw;
+    return `"${safe.replace(/"/g, '""')}"`;
 }
 
 export default function Attendance() {
     const { devices } = useSecurity();
     const { user } = useAuth();
+    const [employeeSearch, setEmployeeSearch] = useState('');
+    const [shiftFilter, setShiftFilter] = useState('all');
     const [date, setDate] = useState(() => localDateString());
     const [selected, setSelected] = useState('');
     const [configured, setConfigured] = useState(null);
@@ -133,7 +137,7 @@ export default function Attendance() {
 
     const exportCsv = async () => {
         let exportData = report;
-        if (!exportData?.rows?.length) {
+        {
             try {
                 const { data: result } = await api.get('/attendance/report', { params: { start: reportStart, end: reportEnd } });
                 exportData = result;
@@ -170,10 +174,10 @@ export default function Attendance() {
             r.regular,
             r.overtime,
             r.events,
-            String(r.status || '').toUpperCase(),
+            r.checkout_provisional ? 'PROVISIONAL' : String(r.status || '').toUpperCase(),
         ]);
         const csv = [headers, ...rows].map((row) => row.map(csvCell).join(',')).join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -182,6 +186,27 @@ export default function Attendance() {
         URL.revokeObjectURL(url);
         toast.success('ATTENDANCE CSV EXPORTED');
     };
+
+    const exportPdf = async () => {
+        const win = window.open('', '_blank');
+        if (!win) { toast.error('Allow pop-ups to export PDF'); return; }
+        win.opener = null;
+        win.document.title = 'Kerma Attendance Report';
+        win.document.body.textContent = 'Preparing attendance report…';
+        const escape = (v) => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        try {
+            const { data: result } = await api.get('/attendance/report', { params: { start: reportStart, end: reportEnd } });
+            setReport(result);
+            const cols = ['Date','Employee','Shift','First in','Last out','Worked','Regular','Overtime','Scans','Status'];
+            const rows = (result.rows || []).map(r => [r.shift_date,r.person,r.shift,fmt(r.first_in),fmt(r.last_out),r.worked,r.regular,r.overtime,r.events,r.checkout_provisional?'PROVISIONAL':r.status]);
+            const summary = result.summary || {};
+            win.document.body.innerHTML = '<style>@page{size:A4 landscape;margin:12mm}body{font:12px Arial,sans-serif;color:#172334;margin:24px}h1{font-size:28px;margin:8px 0}header{border-bottom:3px solid #173e62;padding-bottom:14px}small{color:#536579}table{width:100%;border-collapse:collapse;margin-top:20px}th{background:#e5edf5;text-align:left}td,th{padding:8px;border-bottom:1px solid #dbe2ea}tr{break-inside:avoid}thead{display:table-header-group}.metrics{padding:14px;background:#f0f4f8;margin-top:16px;font-weight:bold}footer{margin-top:20px;color:#536579}@media print{body{margin:0}}</style><header><small>KERMA GAMES · SECURITY V2</small><h1>Payroll Attendance Report</h1><div>'+escape(reportStart)+' — '+escape(reportEnd)+' · Monterrey local time</div></header><div class="metrics">Shift records: '+escape(summary.present)+' &nbsp; | &nbsp; Worked: '+escape(summary.worked)+' &nbsp; | &nbsp; Regular: '+escape(summary.regular)+' &nbsp; | &nbsp; Overtime: '+escape(summary.overtime)+'</div><table><thead><tr>'+cols.map(c=>'<th>'+escape(c)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(row=>'<tr>'+row.map(c=>'<td>'+escape(c)+'</td>').join('')+'</tr>').join('')+'</tbody></table><footer>Provisional records are subject to review. Overtime is recorded in completed hours.</footer>';
+            win.focus();
+            win.print();
+        } catch(e) { win.close(); toast.error('PDF EXPORT FAILED'); }
+    };
+
+    const filteredRows = (data.rows || []).filter(r => (shiftFilter === 'all' || r.shift === shiftFilter) && String(r.person || '').toLowerCase().includes(employeeSearch.toLowerCase()));
 
     const shiftBadge = (shift) => {
         const cls = shift === 'A'
@@ -293,7 +318,20 @@ export default function Attendance() {
                 </div>
             </section>
 
+            <section className="grid gap-3 sm:grid-cols-3">
+                {['A','B','C'].map((shift, i) => {
+                    const count = (data.rows || []).filter(r => r.shift === shift).length;
+                    return <button key={shift} onClick={() => setShiftFilter(shiftFilter === shift ? 'all' : shift)} className={`rounded-xl border p-4 text-left transition-colors ${shiftFilter === shift ? 'border-sky-400 bg-sky-400/10' : 'border-white/10 bg-[#09101d]/90 hover:border-sky-400/40'}`}>
+                        <div className="flex items-center justify-between">{shiftBadge(shift)}<span className="text-xs text-slate-400">{['07:00 – 15:00','15:00 – 23:00','23:00 – 07:00'][i]}</span></div>
+                        <div className="mt-3 text-3xl font-bold text-slate-100">{count}</div><div className="text-xs text-slate-400">Recorded shifts</div>
+                    </button>;
+                })}
+            </section>
             <section className="overflow-hidden rounded-xl border border-sky-500/15 bg-[#09101d]/90">
+                <div className="flex flex-wrap gap-3 border-b border-white/10 p-4">
+                    <label className="flex min-w-48 flex-1 items-center gap-2 rounded-lg border border-white/10 bg-[#050811] px-3 text-slate-400"><Search size={16}/><input aria-label="Search employee" placeholder="Search employee…" value={employeeSearch} onChange={e=>setEmployeeSearch(e.target.value)} className="min-h-10 w-full bg-transparent text-sm text-slate-100 outline-none"/></label>
+                    <select aria-label="Filter shift" value={shiftFilter} onChange={e=>setShiftFilter(e.target.value)} className="rounded-lg border border-white/10 bg-[#050811] px-3 text-sm text-slate-200"><option value="all">All shifts</option><option value="A">Shift A</option><option value="B">Shift B</option><option value="C">Shift C</option></select>
+                </div>
                 <div className="flex items-center justify-between border-b border-white/5 px-5 py-4">
                     <div className="flex items-center gap-2">
                         <Clock3 size={16} className="text-sky-300" />
@@ -318,10 +356,10 @@ export default function Attendance() {
                             </tr>
                         </thead>
                         <tbody>
-                            {!loading && data.rows?.length === 0 && (
+                            {!loading && filteredRows.length === 0 && (
                                 <tr><td colSpan="10" className="px-5 py-12 text-center mono text-[10px] tracking-wider text-slate-600">NO ATTENDANCE RECORDS FOR THIS SHIFT DATE</td></tr>
                             )}
-                            {(data.rows || []).map((row) => (
+                            {filteredRows.map((row) => (
                                 <tr key={`${row.person}-${row.shift_date}-${row.shift}`} className="border-b border-white/[0.04] last:border-0">
                                     <td className="px-4 py-4 text-sm font-semibold text-slate-200">{row.person}</td>
                                     <td className="px-4 py-4">{shiftBadge(row.shift)}</td>
@@ -339,7 +377,7 @@ export default function Attendance() {
                                                 : row.status === 'open'
                                                     ? 'border-sky-400/30 bg-sky-400/10 text-sky-300'
                                                     : 'border-orange-400/30 bg-orange-400/10 text-orange-300'
-                                        }`}>{String(row.status || '').toUpperCase()}</span>
+                                        }`}>{row.checkout_provisional ? 'PROVISIONAL' : String(row.status || '').toUpperCase()}</span>
                                     </td>
                                 </tr>
                             ))}
@@ -372,6 +410,7 @@ export default function Attendance() {
                         <button onClick={() => loadReport()} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-4 text-xs font-bold text-slate-300 hover:bg-white/[0.07]">
                             <RefreshCw size={14} className={reportLoading ? 'animate-spin' : ''} /> LOAD
                         </button>
+                        <button onClick={exportPdf} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-sky-400/30 bg-sky-400/10 px-4 text-xs font-bold text-sky-200 hover:bg-sky-400/20"><FileText size={14} /> EXPORT PDF</button>
                         <button onClick={exportCsv} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-[#ea7f2b]/30 bg-[#ea7f2b]/10 px-4 text-xs font-bold text-[#fee396] hover:bg-[#ea7f2b]/15">
                             <Download size={14} /> EXPORT CSV
                         </button>
