@@ -271,11 +271,57 @@ export default function EmergencyRelease() {
                     >
                         {busy ? <Loader2 className="animate-spin" size={32} /> : <Siren size={37} />}
                         <span className="text-xl font-black leading-tight tracking-wider sm:text-2xl">EMERGENCY<br />RELEASE</span>
-                        <span className="text-xs font-semibold">OPEN ALL · {selected.length} SALIDAS</span>
+                        <span className="text-xs font-semibold">{selected.length} SALIDAS AUTORIZADAS</span>
                     </button>
                     <p className="mt-8 text-center text-xs text-slate-400">
-                        {!status?.armed ? 'Deshabilitado hasta autorizar la puesta en servicio física.' : selected.length === 0 ? 'Seleccione las salidas de evacuación.' : 'Se requiere confirmación expresa para activar.'}
+                        {!status?.armed ? 'NO DISPONIBLE · utilice el sistema local de emergencia.' : selected.length === 0 ? 'Seleccione las salidas de evacuación.' : 'Se requiere confirmación expresa para activar.'}
                     </p>
+                </section>
+                <section className="rounded-2xl border border-white/10 bg-[#0b1220] p-6">
+                    <h2 className="text-lg font-semibold text-white">Estado del sistema</h2>
+                    <div className="mt-5 grid grid-cols-2 gap-3">
+                        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+                            <p className="text-xs text-slate-500">Salidas seleccionadas</p>
+                            <p className="mt-2 text-3xl font-black text-white">{loading ? '—' : selected.length}</p>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
+                            <p className="text-xs text-slate-500">Gateway</p>
+                            <div className="mt-3 flex items-center gap-2 text-sm font-semibold">
+                                {status?.gatewayOnline ? <><Radio size={16} className="text-emerald-400" /><span className="text-emerald-300">En línea</span></> : <><WifiOff size={16} className="text-amber-400" /><span className="text-amber-300">Sin conexión</span></>}
+                            </div>
+                        </div>
+                    </div>
+                    <div className="mt-5 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+                        <div className="flex gap-3">
+                            <CircleHelp size={18} className="shrink-0 text-amber-300" />
+                            <p className="text-xs leading-relaxed text-slate-300">Tras una activación real, Seguridad/EHS debe comprobar físicamente las salidas, atender cualquier fallo y restablecer los controladores conforme al procedimiento local. Este módulo <strong>no vuelve a bloquear puertas automáticamente</strong>.</p>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
+            {lastResult && (
+                <section className="rounded-xl border border-sky-500/25 bg-[#0b1220] p-5" aria-live="polite">
+                    <h2 className="flex items-center gap-2 font-semibold text-white">
+                        {lastResult.mode === 'simulation' ? <CheckCircle2 size={19} className="text-emerald-300" /> : <ShieldAlert size={19} className="text-amber-300" />}
+                        {lastResult.mode === 'simulation' ? (lastResult.state === 'closed' ? 'Simulacro cerrado — ninguna puerta fue accionada' : 'Simulacro terminado — ninguna puerta fue accionada') : 'Orden enviada — comprobación física requerida'}
+                    </h2>
+                    <p className="mt-2 mono text-[10px] text-slate-500">Incidente {lastResult.incidentId}</p>
+                    <div className="mt-4 space-y-2">
+                        {lastResult.results?.map((r) => (
+                            <div key={r.id} className="flex flex-wrap justify-between gap-2 border-b border-white/5 py-2 text-sm">
+                                <span className="text-slate-200">{r.name}</span>
+                                <span className={r.result === 'FAILED_OR_UNKNOWN' ? 'text-rose-300' : 'text-amber-200'}>{statusLabel[r.result] || r.result}</span>
+                            </div>
+                        ))}
+                    </div>
+                </section>
+            )}
+
+            <details className="rounded-xl border border-white/10 bg-[#0b1220] p-4">
+                <summary className="cursor-pointer text-sm font-semibold text-slate-400">Configuración y pruebas supervisadas</summary>
+                <div className="mt-4 space-y-5">
+                    <section className="rounded-xl border border-white/10 p-5">
                     <button
                         data-testid="emergency-simulate-button"
                         type="button"
@@ -313,31 +359,7 @@ export default function EmergencyRelease() {
                             El control físico requiere autorización de Seguridad/EHS y pruebas de los mecanismos de salida.
                         </p>
                     </div>
-                </section>
-
-                <section className="rounded-2xl border border-white/10 bg-[#0b1220] p-6">
-                    <h2 className="text-lg font-semibold text-white">Estado del sistema</h2>
-                    <div className="mt-5 grid grid-cols-2 gap-3">
-                        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
-                            <p className="text-xs text-slate-500">Salidas seleccionadas</p>
-                            <p className="mt-2 text-3xl font-black text-white">{loading ? '—' : selected.length}</p>
-                        </div>
-                        <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4">
-                            <p className="text-xs text-slate-500">Gateway</p>
-                            <div className="mt-3 flex items-center gap-2 text-sm font-semibold">
-                                {status?.gatewayOnline ? <><Radio size={16} className="text-emerald-400" /><span className="text-emerald-300">En línea</span></> : <><WifiOff size={16} className="text-amber-400" /><span className="text-amber-300">Sin conexión</span></>}
-                            </div>
-                        </div>
-                    </div>
-                    <div className="mt-5 rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
-                        <div className="flex gap-3">
-                            <CircleHelp size={18} className="shrink-0 text-amber-300" />
-                            <p className="text-xs leading-relaxed text-slate-300">Tras una activación real, Seguridad/EHS debe comprobar físicamente las salidas, atender cualquier fallo y restablecer los controladores conforme al procedimiento local. Este módulo <strong>no vuelve a bloquear puertas automáticamente</strong>.</p>
-                        </div>
-                    </div>
-                </section>
-            </div>
-
+                    </section>
             <section className="rounded-2xl border border-sky-500/30 bg-[#0b1220] p-5" data-testid="facial-emergency-diagnostics">
                 <div className="flex items-center gap-2">
                     <CircleHelp size={19} className="text-sky-300" />
@@ -443,24 +465,6 @@ export default function EmergencyRelease() {
                 )}
             </section>
 
-            {lastResult && (
-                <section className="rounded-xl border border-sky-500/25 bg-[#0b1220] p-5" aria-live="polite">
-                    <h2 className="flex items-center gap-2 font-semibold text-white">
-                        {lastResult.mode === 'simulation' ? <CheckCircle2 size={19} className="text-emerald-300" /> : <ShieldAlert size={19} className="text-amber-300" />}
-                        {lastResult.mode === 'simulation' ? (lastResult.state === 'closed' ? 'Simulacro cerrado — ninguna puerta fue accionada' : 'Simulacro terminado — ninguna puerta fue accionada') : 'Orden enviada — comprobación física requerida'}
-                    </h2>
-                    <p className="mt-2 mono text-[10px] text-slate-500">Incidente {lastResult.incidentId}</p>
-                    <div className="mt-4 space-y-2">
-                        {lastResult.results?.map((r) => (
-                            <div key={r.id} className="flex flex-wrap justify-between gap-2 border-b border-white/5 py-2 text-sm">
-                                <span className="text-slate-200">{r.name}</span>
-                                <span className={r.result === 'FAILED_OR_UNKNOWN' ? 'text-rose-300' : 'text-amber-200'}>{statusLabel[r.result] || r.result}</span>
-                            </div>
-                        ))}
-                    </div>
-                </section>
-            )}
-
             <section className="rounded-2xl border border-white/10 bg-[#0b1220] p-5 sm:p-6">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
@@ -548,6 +552,8 @@ export default function EmergencyRelease() {
                     {!status?.recent?.length && <p className="text-sm text-slate-500">No hay activaciones registradas.</p>}
                 </div>
             </section>
+                </div>
+            </details>
 
             {testModal && (
                 <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/90 p-4" role="presentation">
