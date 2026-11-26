@@ -2546,6 +2546,13 @@ def vehicle_registry_fields(has_vehicle: bool, plates: list[str], actor: str) ->
 
 @api_router.post("/employees")
 async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
+    if not body.photoPath:
+        raise HTTPException(status_code=400, detail="A profile photo is required for new enrollment")
+    try:
+        photo_bytes, _ = await get_object(body.photoPath)
+        await run_in_threadpool(encode_hikvision_face_jpeg, photo_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Upload a valid JPG or PNG profile photo before enrollment") from exc
     card_no = str(body.cardNo or "").strip()
     if not card_no.isdigit() or len(card_no) != 10:
         raise HTTPException(status_code=400, detail="Card number must be exactly 10 digits, including leading zeros")
