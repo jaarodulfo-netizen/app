@@ -2751,6 +2751,35 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
     return doc_id(doc)
 
 
+@api_router.put("/employees/{item_id}/photo")
+async def update_employee_photo(item_id: str, file: UploadFile = File(...), user=Depends(require_enrollment)):
+    """Save a profile photo independently; do not provision or change device permissions."""
+    if not ObjectId.is_valid(item_id):
+        raise HTTPException(status_code=400, detail="Invalid employee ID")
+    oid = ObjectId(item_id)
+    existing = await db.employees.find_one({"_id": oid, "is_active": {"$ne": False}})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Active employee not found")
+    raw = await file.read(5 * 1024 * 1024 + 1)
+    if not raw or len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Choose a JPG or PNG image under 5 MB")
+    try:
+        jpeg = await run_in_threadpool(encode_hikvision_face_jpeg, raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid or unsupported photo; use a clear JPG or PNG") from exc
+    path = f"{APP_NAME}/photos/{oid}/{uuid.uuid4()}.jpg"
+    stored = await put_object(path, jpeg, "image/jpeg")
+    await db.files.insert_one({"storage_path": stored["path"], "original_filename": file.filename,
+        "content_type": "image/jpeg", "size": stored["size"], "is_deleted": False,
+        "created_at": datetime.now(timezone.utc)})
+    result = await db.employees.update_one({"_id": oid, "is_active": {"$ne": False}},
+        {"$set": {"photoPath": stored["path"], "faceSync": False, "faceMatch": None,
+                  "updated_at": datetime.now(timezone.utc), "updated_by": user["email"]}})
+    if result.matched_count != 1:
+        raise HTTPException(status_code=409, detail="Employee is no longer active")
+    return doc_id(await db.employees.find_one({"_id": oid}))
+
+
 @api_router.put("/employees/{item_id}/vehicles")
 async def update_employee_vehicles(
     item_id: str, body: EmployeeVehicleUpdate, user=Depends(require_enrollment),
