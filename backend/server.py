@@ -2649,6 +2649,16 @@ async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     try:
         await sync_employee_to_gateway(doc)
         doc = await db.employees.find_one({"_id": doc["_id"]}) or doc
+    except RuntimeError as exc:
+        if str(exc) != "LIVE_MONITOR: hardware writes disabled":
+            await db.employees.delete_one({"_id": r.inserted_id})
+            raise
+        await db.employees.update_one(
+            {"_id": r.inserted_id},
+            {"$set": {"hardwareSync": "pending", "hardwareSyncError": str(exc)}},
+        )
+        doc = await db.employees.find_one({"_id": r.inserted_id}) or doc
+        return doc_id(doc)
     except Exception:
         await db.employees.delete_one({"_id": r.inserted_id})
         raise
