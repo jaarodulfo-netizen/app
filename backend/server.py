@@ -2076,6 +2076,9 @@ def normalize_door_rights(raw: Optional[dict]) -> dict:
     if not isinstance(raw, dict):
         return rights
     for device_id, door_numbers in raw.items():
+        # Attendance-only terminal is not a physical door permission.
+        if str(device_id).strip().lower() == "attendance-main":
+            continue
         if not isinstance(door_numbers, list):
             continue
         clean = []
@@ -2316,6 +2319,8 @@ async def validate_physical_access_rights(rights: dict) -> None:
 @api_router.get("/access-levels")
 async def list_access_levels(user=Depends(get_current_user)):
     docs = await db.access_levels.find().sort("name", 1).to_list(200)
+    for doc in docs:
+        doc["doorRights"] = normalize_door_rights(doc.get("doorRights"))
     return [doc_id(d) for d in docs]
 
 
