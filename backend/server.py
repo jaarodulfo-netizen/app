@@ -1064,7 +1064,7 @@ def _duration_parts(first_in: datetime, last_out: datetime):
         return 0, 0, 0
     worked = max(0, int((last_out - first_in).total_seconds()))
     regular = min(worked, 8 * 3600)
-    overtime = max(0, worked - regular)
+    overtime = (max(0, worked - regular) // 3600) * 3600
     return worked, regular, overtime
 
 
@@ -1150,6 +1150,8 @@ async def _attendance_sessions(start_day, end_day, device):
                     "first_in": first.isoformat(),
                     "last_out": last.isoformat() if len(session_scans) > 1 else None,
                     "events": len(session_scans),
+                    "last_scan": last.isoformat(),
+                    "checkout_provisional": datetime.now(ATTENDANCE_TZ) < capture_end,
                     "worked_seconds": worked,
                     "regular_seconds": regular,
                     "overtime_seconds": overtime,
@@ -4286,7 +4288,7 @@ KERMA_DEVICE_SEED = [
     {"type": "face", "name": "Cleaning Storage", "gatewayDeviceId": "cleaning-storage", "doors": [1], "ip": "192.168.1.169", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
     {"type": "face", "name": "Roof Stairs", "gatewayDeviceId": "roof-stairs", "doors": [1], "ip": "192.168.1.124", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
     {"type": "face", "name": "Technicians Inventory", "gatewayDeviceId": "technicians-inventory", "doors": [1], "ip": "192.168.3.208", "fw": "", "detail": "Hikvision facial terminal", "signal": 95},
-    {"type": "face", "name": "Attendance Main", "gatewayDeviceId": "attendance-main", "doors": [1], "ip": "192.168.0.77", "fw": "", "detail": "Dedicated attendance facial terminal", "signal": 95},
+    {"type": "face", "name": "Attendance Main", "gatewayDeviceId": "attendance-main", "doors": [1], "ip": "192.168.3.224", "fw": "", "detail": "Dedicated attendance facial terminal", "signal": 95},
     {"type": "card", "name": "1st Floor AC", "gatewayDeviceId": "1st-floor-ac", "doors": [1,2,3,4], "ip": "192.168.3.111", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
     {"type": "card", "name": "2nd Floor AC", "gatewayDeviceId": "2nd-floor-ac", "doors": [1,2,3,4], "ip": "192.168.3.112", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
     {"type": "card", "name": "Break Room", "gatewayDeviceId": "break-room", "doors": [1,2,3,4], "ip": "192.168.3.113", "fw": "", "detail": "Hikvision 4-door access controller · SDK port 8000", "signal": 95},
