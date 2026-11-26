@@ -569,7 +569,7 @@ function EnrollModal({ open, onClose }) {
                                     </button>
                                     <div>
                                         <p className="mono text-[10px] tracking-widest text-slate-500">ID PHOTO · REQUIRED</p>
-                                        <p className="text-xs text-slate-500 mt-1">JPG/PNG up to 5 MB. Use a clear, front-facing photo. Physical face enrollment must be verified.</p>
+                                        <p className="text-xs text-slate-500 mt-1">JPG/PNG up to 5 MB. AI processes the background and creates standardized photos when you enroll. Use a clear, front-facing portrait.</p>
                                     </div>
                                     <input ref={fileRef} data-testid="enroll-photo-input" type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
                                 </div>
@@ -637,7 +637,7 @@ function EnrollModal({ open, onClose }) {
                                 </p>
                                 <p className="text-xs text-slate-400 mt-3 text-center max-w-[250px]">
                                     {photoPreview
-                                        ? 'The photo is included in the enrollment request. Facial access stays unverified until the Hikvision terminals confirm it.'
+                                        ? 'The uploaded photo will be processed automatically on enrollment. Facial access stays unverified until the Hikvision terminals confirm it.'
                                         : 'A clear front-facing photo is required before enrollment.'}
                                 </p>
                             </div>
@@ -873,8 +873,8 @@ function EditEmployeeModal({ employee, onClose }) {
                         <div>
                             <p className="mono text-[10px] tracking-widest text-slate-500">EMPLOYEE PHOTO</p>
                             <p className="mt-1 text-xs text-slate-500">Click the box to add or replace the image. JPG/PNG up to 5 MB.</p>
-                            <button type="button" onClick={savePhotoOnly} disabled={!photo || photoSaving || saving || vehicleSaving} className="mt-3 rounded-lg border border-sky-400/40 bg-sky-400/10 px-4 py-2 text-xs font-bold text-sky-200 hover:bg-sky-400/20 disabled:opacity-40">{photoSaving ? 'SAVING PHOTO…' : 'SAVE PHOTO'}</button>
-                            <p className="mt-2 text-xs text-slate-400">Saves the photo only, without modifying cards or access rights.</p>
+                            <button type="button" onClick={savePhotoOnly} disabled={!photo || photoSaving || saving || vehicleSaving} className="mt-3 rounded-lg border border-sky-400/40 bg-sky-400/10 px-4 py-2 text-xs font-bold text-sky-200 hover:bg-sky-400/20 disabled:opacity-40">{photoSaving ? 'PROCESSING PHOTO…' : 'SAVE PHOTO'}</button>
+                            <p className="mt-2 text-xs text-slate-400">AI removes the background and creates corporate and Hikvision photos when saved. Cards and access rights stay unchanged.</p>
                         </div>
                         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
                     </div>
