@@ -487,6 +487,7 @@ function EnrollModal({ open, onClose }) {
     };
 
     const submit = async () => {
+        if (!photo) { toast.error('PHOTO REQUIRED'); return; }
         setSaving(true);
         try {
             let photoPath = null;
@@ -522,7 +523,7 @@ function EnrollModal({ open, onClose }) {
     };
 
     const valid = name.trim().length > 1 && /^\d{10}$/.test(cardNo) &&
-        !!accessLevelId && vehiclePlatesValid(hasVehicle, platesText);
+        !!photo && !!accessLevelId && vehiclePlatesValid(hasVehicle, platesText);
 
     return (
         <AnimatePresence>
@@ -567,7 +568,7 @@ function EnrollModal({ open, onClose }) {
                                         </span>
                                     </button>
                                     <div>
-                                        <p className="mono text-[10px] tracking-widest text-slate-500">ID PHOTO · OPTIONAL</p>
+                                        <p className="mono text-[10px] tracking-widest text-slate-500">ID PHOTO · REQUIRED</p>
                                         <p className="text-xs text-slate-500 mt-1">JPG/PNG up to 5 MB. Use a clear, front-facing photo. Physical face enrollment must be verified.</p>
                                     </div>
                                     <input ref={fileRef} data-testid="enroll-photo-input" type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
@@ -637,7 +638,7 @@ function EnrollModal({ open, onClose }) {
                                 <p className="text-xs text-slate-400 mt-3 text-center max-w-[250px]">
                                     {photoPreview
                                         ? 'The photo is included in the enrollment request. Facial access stays unverified until the Hikvision terminals confirm it.'
-                                        : 'Card-only enrollment is possible. Add a clear photo to request facial access on the authorized Hikvision terminals.'}
+                                        : 'A clear front-facing photo is required before enrollment.'}
                                 </p>
                             </div>
                         </div>
@@ -694,6 +695,7 @@ function EditEmployeeModal({ employee, onClose }) {
     const [hasVehicle, setHasVehicle] = useState(Boolean(employee?.hasVehicle || employee?.licensePlates?.length));
     const [platesText, setPlatesText] = useState((employee?.licensePlates || []).join(', '));
     const [vehicleSaving, setVehicleSaving] = useState(false);
+    const [photoSaving, setPhotoSaving] = useState(false);
     const [validFromDate, setValidFromDate] = useState(originalValidFrom);
     const [validToDate, setValidToDate] = useState(originalValidTo);
     const [photo, setPhoto] = useState(null);
@@ -717,8 +719,28 @@ function EditEmployeeModal({ employee, onClose }) {
     const pickPhoto = (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        if (!['image/jpeg', 'image/png'].includes(file.type) || !file.size || file.size > 5 * 1024 * 1024) {
+            toast.error('INVALID FACE PHOTO', { description: 'Use JPG or PNG under 5 MB.' }); e.target.value = ''; return;
+        }
+        if (photoPreview?.startsWith('blob:')) URL.revokeObjectURL(photoPreview);
         setPhoto(file);
         setPhotoPreview(URL.createObjectURL(file));
+    };
+
+    const savePhotoOnly = async () => {
+        if (!photo || photoSaving) return;
+        setPhotoSaving(true);
+        try {
+            const fd = new FormData(); fd.append('file', photo);
+            const { data } = await api.put(`/employees/${employee.id}/photo`, fd);
+            if (photoPreview?.startsWith('blob:')) URL.revokeObjectURL(photoPreview);
+            setPhoto(null); setPhotoPreview(fileUrl(data.photoPath));
+            toast.success('PHOTO SAVED', { description: 'Profile updated. Facial device verification is still required.' });
+            await refreshEmployees();
+            onClose();
+        } catch (e) {
+            toast.error('PHOTO SAVE FAILED', { description: formatApiError(e?.response?.data?.detail || e?.message) });
+        } finally { setPhotoSaving(false); }
     };
 
     const parsedCards = cardsText
@@ -850,7 +872,9 @@ function EditEmployeeModal({ employee, onClose }) {
                         </button>
                         <div>
                             <p className="mono text-[10px] tracking-widest text-slate-500">EMPLOYEE PHOTO</p>
-                            <p className="mt-1 text-xs text-slate-500">Click the box to add or replace the image.</p>
+                            <p className="mt-1 text-xs text-slate-500">Click the box to add or replace the image. JPG/PNG up to 5 MB.</p>
+                            <button type="button" onClick={savePhotoOnly} disabled={!photo || photoSaving || saving || vehicleSaving} className="mt-3 rounded-lg border border-sky-400/40 bg-sky-400/10 px-4 py-2 text-xs font-bold text-sky-200 hover:bg-sky-400/20 disabled:opacity-40">{photoSaving ? 'SAVING PHOTO…' : 'SAVE PHOTO'}</button>
+                            <p className="mt-2 text-xs text-slate-400">Saves the photo only, without modifying cards or access rights.</p>
                         </div>
                         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={pickPhoto} />
                     </div>
@@ -956,7 +980,7 @@ function EditEmployeeModal({ employee, onClose }) {
                     <VehicleFields hasVehicle={hasVehicle} setHasVehicle={setHasVehicle}
                         platesText={platesText} setPlatesText={setPlatesText} testPrefix="edit" />
                     <button type="button" onClick={saveVehicleOnly}
-                        disabled={vehicleSaving || !vehicleValid}
+                        disabled={vehicleSaving || photoSaving || !vehicleValid}
                         data-testid="edit-save-vehicle"
                         className="rounded-lg border border-sky-500/40 px-3 py-2 mono text-[10px] tracking-wide text-sky-200 hover:bg-sky-500/10 disabled:opacity-40">
                         {vehicleSaving ? 'SAVING VEHICLE…' : 'SAVE VEHICLE ONLY (NO DOOR SYNC)'}
@@ -965,7 +989,7 @@ function EditEmployeeModal({ employee, onClose }) {
 
                 <div className="mt-6 flex justify-end gap-3 border-t border-white/5 pt-5">
                     <button onClick={onClose} className="rounded-full border border-white/10 px-5 py-2.5 mono text-[10px] tracking-widest text-slate-400 hover:text-white">CANCEL</button>
-                    <button onClick={submit} disabled={saving || !vehicleValid || !cardsValid || !validityReady || !name.trim() || (customRights ? selectedDoors.length === 0 : !accessLevelId)}
+                    <button onClick={submit} disabled={saving || photoSaving || !vehicleValid || !cardsValid || !validityReady || !name.trim() || (customRights ? selectedDoors.length === 0 : !accessLevelId)}
                         className="flex items-center gap-2 rounded-full bg-sky-500 px-6 py-2.5 font-head font-bold tracking-widest text-sm text-[#04121f] hover:bg-cyan-400 disabled:opacity-40">
                         {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
                         {saving ? 'SAVING…' : 'SAVE CHANGES'}
