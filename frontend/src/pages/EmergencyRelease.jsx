@@ -255,25 +255,25 @@ export default function EmergencyRelease() {
             </div>
 
             {error && <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 p-4 text-sm text-rose-200" role="alert">{error}</div>}
-            <div className="grid gap-5 lg:grid-cols-[1.2fr_1fr]">
+            <div className="grid gap-5">
                 <section className="rounded-2xl border border-rose-500/35 bg-gradient-to-b from-[#231018] to-[#0b101c] p-6 sm:p-8">
-                    <div className="flex items-center gap-2 text-rose-200">
+                    <div className="flex items-center justify-center gap-2 text-rose-200">
                         <AlertOctagon size={19} />
                         <span className="mono text-xs font-bold tracking-widest">ACTIVACIÓN DE EMERGENCIA</span>
                     </div>
-                    <p className="mt-3 text-sm text-slate-300">Libera el grupo de salidas preparado con anticipación. <strong>No necesitas elegir las puertas durante la emergencia.</strong> La aplicación no sustituye el sistema cableado de alarma contra incendios.</p>
+                    <p className="mx-auto mt-3 max-w-xl text-center text-sm text-slate-300">Libera el grupo de salidas preparado con anticipación. <strong>No necesitas elegir las puertas durante la emergencia.</strong> La aplicación no sustituye el sistema cableado de alarma contra incendios.</p>
                     <button
                         data-testid="emergency-activate-button"
                         type="button"
                         onClick={() => { setPhrase(''); setAccepted(false); setModal(true); }}
                         disabled={!canActivate}
-                        className="mt-7 flex min-h-36 w-full flex-col items-center justify-center gap-2 rounded-2xl border-4 border-rose-300/35 bg-gradient-to-b from-red-500 to-red-800 px-4 text-white shadow-[0_0_40px_rgba(239,68,68,0.18)] transition-transform hover:scale-[1.01] focus-visible:outline focus-visible:outline-4 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-40"
+                        className="mx-auto mt-8 flex aspect-square w-full max-w-[260px] flex-col items-center justify-center gap-3 rounded-full border-[6px] border-rose-300/40 bg-gradient-to-b from-red-500 via-red-700 to-red-900 px-5 text-center text-white shadow-[0_0_0_10px_rgba(239,68,68,0.08),0_0_0_20px_rgba(239,68,68,0.04),0_18px_45px_rgba(0,0,0,0.5)] transition-transform hover:scale-[1.02] active:scale-[0.98] focus-visible:outline focus-visible:outline-4 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         {busy ? <Loader2 className="animate-spin" size={32} /> : <Siren size={37} />}
-                        <span className="text-lg font-black tracking-widest sm:text-xl">LIBERAR PUERTAS</span>
-                        <span className="text-xs font-semibold">EMERGENCY RELEASE · {selected.length} SALIDAS CONFIGURADAS</span>
+                        <span className="text-xl font-black leading-tight tracking-wider sm:text-2xl">EMERGENCY<br />RELEASE</span>
+                        <span className="text-xs font-semibold">OPEN ALL · {selected.length} SALIDAS</span>
                     </button>
-                    <p className="mt-3 text-center text-xs text-slate-400">
+                    <p className="mt-8 text-center text-xs text-slate-400">
                         {!status?.armed ? 'Deshabilitado hasta autorizar la puesta en servicio física.' : selected.length === 0 ? 'Seleccione las salidas de evacuación.' : 'Se requiere confirmación expresa para activar.'}
                     </p>
                     <button
