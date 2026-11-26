@@ -1302,8 +1302,8 @@ LINUX_SITE_MANIFEST = {
     "restrooms": ("2-AC1 Restrooms", "192.168.3.204", "controller", (1, 2, 3, 4)),
     "3rd-floor-ac": ("3-AC1", "192.168.3.209", "controller", (1, 2, 3, 4)),
     "break-room": ("B-AC1 Break Room", "192.168.3.214", "controller", (1, 2, 3, 4)),
-    "1-ac3": ("1-AC3", "192.168.3.222", "controller", ()),
-    "2-ac7": ("2-AC7", "192.168.3.223", "controller", ()),
+    "1-ac3": ("1-AC3", "192.168.3.222", "controller", (1, 2, 3, 4)),
+    "2-ac7": ("2-AC7", "192.168.3.223", "controller", (1, 2, 3, 4)),
 }
 gateway_linux_inventory: dict[str, dict] = {}
 
@@ -1321,10 +1321,11 @@ def linux_inventory_item(raw):
     if (str(raw.get("name") or "").strip().casefold() != name.casefold()
             or raw.get("role") != role or not isinstance(reported, list)
             or any(type(n) is not int for n in reported)
-            or tuple(sorted(reported)) != doors):
+            or (tuple(sorted(reported)) != doors
+                and not (device_id in {"1-ac3", "2-ac7"} and reported == []))):
         return None
     return {"id": device_id, "name": name, "role": role,
-            "doors": list(doors), "online": raw.get("online") is True, "ip": ip}
+            "doors": sorted(reported), "online": raw.get("online") is True, "ip": ip}
 
 
 # Independent media WebSocket: never queue large HLS video in the door/control
