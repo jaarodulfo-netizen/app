@@ -1895,30 +1895,78 @@ async def gateway_socket(websocket: WebSocket):
 
 
 # --- File upload (employee photos) ---
+# CPU-only segmentation. One session per process, serialized to bound memory.
+from threading import Lock
+from io import BytesIO
+from PIL import Image, ImageOps, ImageDraw, ImageFont
+_photo_ai_lock = Lock()
+_photo_ai_session = None
+
+def prepare_enrollment_photos(raw: bytes):
+    global _photo_ai_session
+    encode_hikvision_face_jpeg(raw)  # validate bounds and decodability first
+    with Image.open(BytesIO(raw)) as source:
+        image = ImageOps.exif_transpose(source).convert("RGB")
+        image.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+    from rembg import remove, new_session
+    with _photo_ai_lock:
+        if _photo_ai_session is None:
+            _photo_ai_session = new_session("u2netp", providers=["CPUExecutionProvider"])
+        cutout = remove(image, session=_photo_ai_session).convert("RGBA")
+    bounds = cutout.getchannel("A").point(lambda x: 255 if x >= 100 else 0).getbbox()
+    if not bounds:
+        raise ValueError("No foreground detected; choose a clear portrait")
+    subject = cutout.crop(bounds)
+    subject.thumbnail((540, 710), Image.Resampling.LANCZOS)
+    neutral = Image.new("RGB", (600, 800), (245, 245, 245))
+    corporate = Image.new("RGB", (600, 800), (28, 36, 48))
+    draw = ImageDraw.Draw(corporate)
+    font = ImageFont.load_default(size=24)
+    draw.text((300, 36), "KERMAGAMES.COM", font=font, anchor="mt", fill=(245, 245, 245))
+    pos = ((600 - subject.width) // 2, 800 - subject.height)
+    for canvas in (neutral, corporate):
+        canvas.paste(subject, pos, subject.getchannel("A"))
+    def as_jpeg(image):
+        out = BytesIO()
+        image.save(out, format="JPEG", quality=90, optimize=True)
+        return out.getvalue()
+    return as_jpeg(corporate), encode_hikvision_face_jpeg(as_jpeg(neutral))
+
+
+async def store_enrollment_photo(raw, filename, owner):
+    try:
+        corporate, hikvision = await run_in_threadpool(prepare_enrollment_photos, raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Enrollment AI photo processing failed")
+        raise HTTPException(status_code=503, detail="AI photo processing unavailable; retry before saving") from exc
+    prefix = f"{APP_NAME}/photos/{owner}/{uuid.uuid4()}"
+    original_type = Image.open(BytesIO(raw)).format
+    original_mime = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}.get(original_type, "application/octet-stream")
+    paths = {}
+    for key, suffix, content, mime in (
+        ("originalPhotoPath", "original", raw, original_mime),
+        ("photoPath", "corporate.jpg", corporate, "image/jpeg"),
+        ("hikvisionPhotoPath", "hikvision.jpg", hikvision, "image/jpeg"),
+    ):
+        stored = await put_object(f"{prefix}/{suffix}", content, mime)
+        paths[key] = stored["path"]
+        await db.files.insert_one({"storage_path": stored["path"], "original_filename": filename,
+            "content_type": mime, "size": stored["size"], "is_deleted": False,
+            "created_at": datetime.now(timezone.utc)})
+    await db.enrollment_photo_sets.insert_one({**paths, "created_by": str(owner),
+        "created_at": datetime.now(timezone.utc)})
+    return paths
+
 
 @api_router.post("/upload/photo")
-async def upload_photo(file: UploadFile = File(...), user=Depends(get_current_user)):
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="Only image files are allowed")
-    data = await file.read()
-    if len(data) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Photo must be under 5MB")
-    ext = file.filename.split(".")[-1].lower() if "." in file.filename else "jpg"
-    if ext not in {"jpg", "jpeg", "png", "webp"}:
-        ext = "jpg"
-    path = f"{APP_NAME}/photos/{user['_id'] if isinstance(user.get('_id'), str) else str(user['_id'])}/{uuid.uuid4()}.{ext}"
-    result = await put_object(path, data, file.content_type)
-    await db.files.insert_one(
-        {
-            "storage_path": result["path"],
-            "original_filename": file.filename,
-            "content_type": file.content_type,
-            "size": result["size"],
-            "is_deleted": False,
-            "created_at": datetime.now(timezone.utc),
-        }
-    )
-    return {"path": result["path"]}
+async def upload_photo(file: UploadFile = File(...), user=Depends(require_enrollment)):
+    raw = await file.read(5 * 1024 * 1024 + 1)
+    if not raw or len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Choose a JPG or PNG image under 5 MB")
+    paths = await store_enrollment_photo(raw, file.filename, str(user["_id"]))
+    return {"path": paths["photoPath"], **paths}
 
 
 @api_router.get("/files/{path:path}")
@@ -2196,7 +2244,7 @@ async def sync_employee_to_gateway(employee: dict):
     })
     if employee.get("photoPath") and face_targets:
         try:
-            photo_bytes, _ = await get_object(employee["photoPath"])
+            photo_bytes, _ = await get_object(employee.get("hikvisionPhotoPath") or employee["photoPath"])
         except Exception as e:
             logger.exception("Face photo could not be loaded for enrollment")
             raise HTTPException(status_code=502, detail="Face photo could not be loaded for device enrollment") from e
@@ -2569,6 +2617,10 @@ async def create_employee(body: EmployeeIn, user=Depends(require_enrollment)):
     await check_license_plate_ownership(plates)
 
     doc = body.model_dump()
+    photo_set = await db.enrollment_photo_sets.find_one({"photoPath": body.photoPath, "created_by": str(user["_id"])})
+    if not photo_set:
+        raise HTTPException(status_code=400, detail="Upload and process a new photo before enrollment")
+    doc.update({k: photo_set[k] for k in ("originalPhotoPath", "hikvisionPhotoPath")})
     doc.update(vehicle_registry_fields(body.hasVehicle, plates, user["email"]))
     doc["cardNo"] = card_no
     doc["cardNos"] = [card_no]
@@ -2726,6 +2778,10 @@ async def update_employee(item_id: str, body: EmployeeUpdate, user=Depends(requi
         updates["doorRights"] = normalize_door_rights(updates.get("doorRights"))
 
     if "photoPath" in updates and updates["photoPath"] != existing.get("photoPath"):
+        photo_set = await db.enrollment_photo_sets.find_one({"photoPath": updates["photoPath"], "created_by": str(user["_id"])})
+        if not photo_set:
+            raise HTTPException(status_code=400, detail="Upload and process a new photo before saving")
+        updates.update({k: photo_set[k] for k in ("originalPhotoPath", "hikvisionPhotoPath")})
         updates["faceSync"] = False
         updates["faceMatch"] = None
 
@@ -2770,17 +2826,9 @@ async def update_employee_photo(item_id: str, file: UploadFile = File(...), user
     raw = await file.read(5 * 1024 * 1024 + 1)
     if not raw or len(raw) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Choose a JPG or PNG image under 5 MB")
-    try:
-        jpeg = await run_in_threadpool(encode_hikvision_face_jpeg, raw)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid or unsupported photo; use a clear JPG or PNG") from exc
-    path = f"{APP_NAME}/photos/{oid}/{uuid.uuid4()}.jpg"
-    stored = await put_object(path, jpeg, "image/jpeg")
-    await db.files.insert_one({"storage_path": stored["path"], "original_filename": file.filename,
-        "content_type": "image/jpeg", "size": stored["size"], "is_deleted": False,
-        "created_at": datetime.now(timezone.utc)})
+    paths = await store_enrollment_photo(raw, file.filename, str(oid))
     result = await db.employees.update_one({"_id": oid, "is_active": {"$ne": False}},
-        {"$set": {"photoPath": stored["path"], "faceSync": False, "faceMatch": None,
+        {"$set": {**paths, "faceSync": False, "faceMatch": None,
                   "updated_at": datetime.now(timezone.utc), "updated_by": user["email"]}})
     if result.matched_count != 1:
         raise HTTPException(status_code=409, detail="Employee is no longer active")
