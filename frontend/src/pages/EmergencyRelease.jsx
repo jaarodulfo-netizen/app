@@ -19,6 +19,7 @@ export default function EmergencyRelease() {
     const [busy, setBusy] = useState(false);
     const [editing, setEditing] = useState(null);
     const [modal, setModal] = useState(false);
+    const [coverOpen, setCoverOpen] = useState(false);
     const [bulkMode, setBulkMode] = useState(null);
     const [bulkAccepted, setBulkAccepted] = useState(false);
     const [closeTarget, setCloseTarget] = useState(null);
@@ -62,6 +63,14 @@ export default function EmergencyRelease() {
     const canConfigureGroup = Boolean(status && !status.armed && !busy && !editing && !loading);
     const invalid = selected.some((d) => !d.linked);
     const canActivate = Boolean(status?.armed && selected.length && !invalid && !busy);
+    useEffect(() => {
+        if (!coverOpen) return undefined;
+        const timer = setTimeout(() => setCoverOpen(false), 10000);
+        return () => clearTimeout(timer);
+    }, [coverOpen]);
+    useEffect(() => {
+        if (!canActivate) setCoverOpen(false);
+    }, [canActivate]);
     const canSimulate = Boolean(selected.length && !invalid && !busy);
     const recentOpenSimulation = (status?.recent || []).find((item) => item.mode === 'simulation' && item.state === 'completed');
     const activeTest = status?.singleDoorTest;
@@ -262,17 +271,27 @@ export default function EmergencyRelease() {
                         <span className="mono text-xs font-bold tracking-widest">ACTIVACIÓN DE EMERGENCIA</span>
                     </div>
                     <p className="mx-auto mt-3 max-w-xl text-center text-sm text-slate-300">Libera el grupo de salidas preparado con anticipación. <strong>No necesitas elegir las puertas durante la emergencia.</strong> La aplicación no sustituye el sistema cableado de alarma contra incendios.</p>
+                    <div className="relative mx-auto mt-8 w-full max-w-[300px] rounded-2xl border-4 border-slate-500 bg-slate-900 p-4 shadow-2xl">
+                    <div className="mb-3 flex items-center justify-between text-xs font-bold tracking-widest text-slate-300">
+                        <span>SAFETY COVER</span><span aria-live="polite" className={coverOpen ? 'text-amber-300' : 'text-emerald-300'}>{coverOpen ? 'OPEN' : 'PROTECTED'}</span>
+                    </div>
+                    <button type="button" data-testid="emergency-safety-cover" aria-expanded={coverOpen} disabled={!canActivate} onClick={() => setCoverOpen(v => !v)} className="mb-3 w-full rounded-lg border border-amber-400/60 bg-amber-500/10 px-3 py-3 text-xs font-black tracking-wider text-amber-200 disabled:opacity-40">{coverOpen ? 'CLOSE SAFETY COVER' : 'STEP 1 · LIFT SAFETY COVER'}</button>
+                    <div className="relative" style={{ perspective: '650px' }}>
                     <button
                         data-testid="emergency-activate-button"
                         type="button"
-                        onClick={() => { setPhrase(''); setAccepted(false); setModal(true); }}
-                        disabled={!canActivate}
+                        onClick={() => { if (!coverOpen || !canActivate) return; setCoverOpen(false); setPhrase(''); setAccepted(false); setModal(true); }}
+                        disabled={!canActivate || !coverOpen}
                         className="mx-auto mt-8 flex aspect-square w-full max-w-[260px] flex-col items-center justify-center gap-3 rounded-full border-[6px] border-rose-300/40 bg-gradient-to-b from-red-500 via-red-700 to-red-900 px-5 text-center text-white shadow-[0_0_0_10px_rgba(239,68,68,0.08),0_0_0_20px_rgba(239,68,68,0.04),0_18px_45px_rgba(0,0,0,0.5)] transition-transform hover:scale-[1.02] active:scale-[0.98] focus-visible:outline focus-visible:outline-4 focus-visible:outline-white disabled:cursor-not-allowed disabled:opacity-40"
                     >
                         {busy ? <Loader2 className="animate-spin" size={32} /> : <Siren size={37} />}
                         <span className="text-xl font-black leading-tight tracking-wider sm:text-2xl">EMERGENCY<br />RELEASE</span>
                         <span className="text-xs font-semibold">{selected.length} SALIDAS AUTORIZADAS</span>
                     </button>
+                    <div aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-2xl border-4 border-red-400/70 bg-red-900/65 shadow-inner transition-transform duration-300 motion-reduce:transition-none" style={{ transformOrigin: 'top center', transform: coverOpen ? 'rotateX(105deg)' : 'rotateX(0deg)', backfaceVisibility: 'hidden' }}><div className="flex h-full flex-col items-center justify-center gap-3 text-center text-white"><LockKeyhole size={30} /><span className="text-sm font-black tracking-widest">SAFETY COVER</span><span className="text-xs">LIFT TO UNLOCK</span></div></div>
+                    </div>
+                    <p className="mt-4 text-center text-xs text-slate-300">{coverOpen ? 'STEP 2 · PRESS EMERGENCY RELEASE' : 'Botón protegido contra activación accidental'}</p>
+                    </div>
                     <p className="mt-8 text-center text-xs text-slate-400">
                         {!status?.armed ? 'NO DISPONIBLE · utilice el sistema local de emergencia.' : selected.length === 0 ? 'Seleccione las salidas de evacuación.' : 'Se requiere confirmación expresa para activar.'}
                     </p>
